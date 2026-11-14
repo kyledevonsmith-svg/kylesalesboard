@@ -21,6 +21,7 @@
   var noteHint = "";
   var compareWith = pack.compareWith || "";
   var compareExtra = pack.compareExtra || "";
+  var comparePlanId = pack.comparePlanId || "";
   var showDemand = !!pack.showDemand;
   var stateLocked = !!pack.stateLocked;
   var appearance = loadAppearance();
@@ -75,6 +76,7 @@
       noteBill: null,
       compareWith: "",
       compareExtra: "",
+      comparePlanId: "",
       showDemand: false,
       stateLocked: false
     };
@@ -101,6 +103,7 @@
         noteBill: saved.noteBill || null,
         compareWith: saved.compareWith || "",
         compareExtra: saved.compareExtra || "",
+        comparePlanId: saved.comparePlanId || "",
         showDemand: !!saved.showDemand,
         stateLocked: !!saved.stateLocked
       };
@@ -125,6 +128,7 @@
         noteBill: noteBill,
         compareWith: compareWith,
         compareExtra: compareExtra,
+        comparePlanId: comparePlanId,
         showDemand: showDemand,
         stateLocked: stateLocked
       }));
@@ -134,16 +138,7 @@
   function keepDemand(current) {
     if (!showDemand || !current || current.ctx.fuel !== "electricity") return current;
     if (C.num(current.usage.demandKw) == null) current = C.setUsage(current, "demandKw", "15");
-    if (C.num(current.a && current.a.rates.demand) != null) return current;
-    var retailer = D.retailerById(current.a.retailerId);
-    var rate = retailer ? D.demandRate(retailer, current.ctx) : null;
-    if (rate == null) {
-      var network = D.networkById(current.ctx.network);
-      rate = network ? network.demand : null;
-    }
-    if (rate == null || !current.a) return current;
-    var rates = Object.assign({}, current.a.rates, { demand: String(rate) });
-    return Object.assign({}, current, { a: Object.assign({}, current.a, { rates: rates }) });
+    return current;
   }
 
   function commit(next) {
@@ -242,12 +237,8 @@
     return Object.assign({}, cost, { total: cost.total + extra, normalised: cost.normalised + extra });
   }
 
-  function withDemand(side, retailer) {
-    if (!showDemand || state.ctx.fuel !== "electricity") return side;
-    if (C.num(side.rates && side.rates.demand) != null) return side;
-    var rate = D.demandRate(retailer, state.ctx);
-    if (rate == null) return side;
-    return Object.assign({}, side, { rates: Object.assign({}, side.rates, { demand: rate }) });
+  function withDemand(side) {
+    return side;
   }
 
   function displayField(field, inclusiveValue) {
@@ -295,36 +286,36 @@
     var custUsage = inclusiveCents(state.a, primaryRateKey());
     var custSupply = inclusiveCents(state.a, "supply");
     D.RETAILERS.forEach(function (retailer) {
-      if (!D.offerExists(retailer, state.ctx)) return;
-      var best = null;
-      D.rankVariants(retailer, state.ctx).forEach(function (variant) {
-        var bundle = D.buildReferencePlan(retailer.id, state.ctx, variant);
-        if (!bundle) return;
-        var side = C.sideFromBundle(bundle, "live");
-        var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
-        if (!cost.complete) return;
-        if (!best || cost.normalised < best.cost.normalised) {
-          best = { retailer: retailer, bundle: bundle, side: side, cost: cost };
-        }
-      });
-      if (!best) return;
-      best.side = withDemand(best.side, retailer);
-      best.cost = addDemandCost(best.side, best.cost);
+      if (!D.serves(retailer, state.ctx)) return;
       var isCustomer = retailer.id === state.a.retailerId;
       var mark = D.tableMark(retailer.id);
       var isOurs = mark === "ours" || mark === "both";
       if (state.a.retailerId && !isCustomer && !isOurs) return;
-      var rowUsage = inclusiveCents(best.side, primaryRateKey());
-      var rowSupply = inclusiveCents(best.side, "supply");
-      if (!isCustomer && custUsage != null && custSupply != null && rowUsage != null && rowSupply != null && rowUsage > custUsage && rowSupply > custSupply) {
-        hiddenWorse += 1;
+      var plans = window.QCPublic ? QCPublic.matching(retailer.id, state.ctx) : [];
+      if (!plans.length) {
+        if (!isOurs && !isCustomer) return;
+        rows.push({ retailer: retailer, bundle: null, side: C.emptySide(), cost: { normalised: Infinity, complete: false }, publicMissing: true });
         return;
       }
-      rows.push(best);
+      plans.forEach(function (plan) {
+        var bundle = QCPublic.toBundle(plan, retailer);
+        var side = C.sideFromBundle(bundle, "plan-doc");
+        var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
+        if (!cost.complete) return;
+        var rowUsage = inclusiveCents(side, primaryRateKey());
+        var rowSupply = inclusiveCents(side, "supply");
+        if (!isCustomer && custUsage != null && custSupply != null && rowUsage != null && rowSupply != null && rowUsage > custUsage && rowSupply > custSupply) {
+          hiddenWorse += 1;
+          return;
+        }
+        rows.push({ retailer: retailer, bundle: bundle, side: side, cost: cost, plan: plan });
+      });
     });
     rows.sort(function (a, b) {
-      var diff = a.cost.normalised - b.cost.normalised;
-      if (!sortAsc) diff = -diff;
+      var aCost = a.cost && a.cost.complete ? a.cost.normalised : Infinity;
+      var bCost = b.cost && b.cost.complete ? b.cost.normalised : Infinity;
+      var diff = aCost - bCost;
+      if (!sortAsc && a.cost && a.cost.complete && b.cost && b.cost.complete) diff = -diff;
       if (diff) return diff;
       return a.retailer.name.localeCompare(b.retailer.name);
     });
@@ -365,44 +356,63 @@
   }
 
   function choiceForBand(current, band) {
-    var retailer = D.retailerById(current.a && current.a.retailerId);
-    if (!retailer) return null;
-    var choices = D.planChoices(retailer, current.ctx.tariff);
-    if (!choices.length) return null;
+    if (!window.QCPublic || !current.a || !current.a.retailerId) return null;
+    var plans = QCPublic.matching(current.a.retailerId, current.ctx);
+    if (!plans.length) return null;
     if (band === "standing") {
-      var standing = null;
-      choices.forEach(function (choice) {
-        if (choice.variant === "standing" && !standing) standing = choice;
+      var basic = null;
+      plans.forEach(function (plan) {
+        if (plan.offer === "standing" && plan.name.indexOf("Solar Sharer") === -1 && !basic) basic = plan;
       });
-      if (standing) return standing;
-      choices.forEach(function (choice) {
-        if (choice.variant === "market" && !standing) standing = choice;
-      });
-      return standing || choices[0];
+      return basic || plans[0];
     }
-    if (band === "market") {
-      var market = null;
-      choices.forEach(function (choice) {
-        if (choice.variant === "market" && !market) market = choice;
-      });
-      return market || choices[0];
-    }
+    var retailer = D.retailerById(current.a.retailerId);
     var usage = C.resolveUsage(current);
     var best = null;
     var bestCost = Infinity;
-    choices.forEach(function (choice) {
-      if (choice.variant === "standing") return;
-      var bundle = D.buildReferencePlan(retailer.id, current.ctx, choice.variant, choice);
-      if (!bundle) return;
-      var side = C.sideFromBundle(bundle, "database");
+    plans.forEach(function (plan) {
+      var side = C.sideFromBundle(QCPublic.toBundle(plan, retailer), "plan-doc");
       var cost = C.annualCost(current.ctx.tariff, side, usage.resolved);
-      if (!cost.complete) return;
-      if (cost.normalised < bestCost) {
-        bestCost = cost.normalised;
-        best = choice;
-      }
+      if (!cost.complete || cost.normalised >= bestCost) return;
+      bestCost = cost.normalised;
+      best = plan;
     });
-    return best;
+    return best || plans[0];
+  }
+
+  function applyPublic(current, plan) {
+    var retailer = D.retailerById(current.a.retailerId);
+    var side = C.sideFromBundle(QCPublic.toBundle(plan, retailer), "plan-doc");
+    var next = Object.assign({}, current, { a: side });
+    if (current.a && current.a.gstInclusive === false) return withGst(next, false);
+    return next;
+  }
+
+  function clearPlan(current) {
+    if (!current.a) return current;
+    return Object.assign({}, current, {
+      a: Object.assign({}, current.a, {
+        planChoiceId: "",
+        planLabel: "",
+        variant: "",
+        source: "",
+        sourceNote: "",
+        rates: {},
+        windows: {},
+        contract: "",
+        termMonths: "",
+        exitNote: ""
+      })
+    });
+  }
+
+  function reapplyPublic(current) {
+    if (!current.a || !current.a.retailerId || !window.QCPublic) return clearPlan(current);
+    var plans = QCPublic.matching(current.a.retailerId, current.ctx);
+    var still = QCPublic.byId(current.a.planChoiceId);
+    if (still && plans.some(function (plan) { return plan.id === still.id; })) return applyPublic(current, still);
+    if (!plans.length) return clearPlan(current);
+    return applyPublic(current, plans[0]);
   }
 
   function scaleUsage(current, level) {
@@ -488,11 +498,9 @@
       return finishUsage(current);
     }
     var choice = choiceForBand(current, read.band);
-    if (!choice) return finishUsage(current);
+    if (!choice) return finishUsage(clearPlan(current));
     if (current.a.planChoiceId === choice.id && appliedBand === read.band && appliedRetailer === current.a.retailerId) return finishUsage(current);
-    var keepInc = current.a.gstInclusive !== false;
-    var next = C.selectPlan(current, choice.id);
-    if (!keepInc) next = withGst(next, false);
+    var next = applyPublic(current, choice);
     if (usageLevel === "manual" && !usageTouched) next = fillUsage(next);
     appliedBand = read.band;
     appliedRetailer = current.a.retailerId;
@@ -542,10 +550,8 @@
       var retailer = D.retailerById(next.a.retailerId);
       if (!retailer || !D.serves(retailer, next.ctx)) {
         next = Object.assign({}, next, { a: C.emptySide() });
-      } else if (next.a.planChoiceId) {
-        var keepInc = next.a.gstInclusive !== false;
-        next = C.selectPlan(next, next.a.planChoiceId);
-        if (!keepInc) next = withGst(next, false);
+      } else if (next.a.planChoiceId || next.a.source === "plan-doc") {
+        next = reapplyPublic(next);
         if (!usageTouched) next = fillUsage(next);
       }
     }
@@ -567,9 +573,12 @@
 
   function setPlan(choiceId) {
     planPinned = true;
-    var keepInc = !state.a || state.a.gstInclusive !== false;
-    var next = C.selectPlan(state, choiceId);
-    if (!keepInc) next = withGst(next, false);
+    var plan = window.QCPublic && QCPublic.byId(choiceId);
+    if (!plan) {
+      commit(clearPlan(state));
+      return;
+    }
+    var next = applyPublic(state, plan);
     if (!usageTouched) next = fillUsage(next);
     commit(next);
   }
@@ -665,12 +674,9 @@
     select.addEventListener("change", function () {
       openId = "";
       var next = ensureOffer(C.setContext(state, { network: select.value }));
-      if (next.a && next.a.retailerId && next.a.planChoiceId) {
-        if (planPinned) {
-          var keepInc = next.a.gstInclusive !== false;
-          next = C.selectPlan(next, next.a.planChoiceId);
-          if (!keepInc) next = withGst(next, false);
-        } else {
+      if (next.a && next.a.retailerId && (next.a.planChoiceId || next.a.source === "plan-doc")) {
+        if (planPinned) next = reapplyPublic(next);
+        else {
           appliedBand = "";
           next = applyTenure(next);
         }
@@ -716,17 +722,19 @@
     var planSelect = el("select", { id: "plan-select" });
     planSelect.append(el("option", { value: "" }, "Choose a plan"));
     var retailer = D.retailerById(state.a.retailerId);
+    var published = window.QCPublic ? QCPublic.matching(retailer.id, state.ctx) : [];
     if (retailer) {
-      D.planChoices(retailer, state.ctx.tariff).forEach(function (choice) {
-        var option = el("option", { value: choice.id }, choice.label);
-        if (choice.id === state.a.planChoiceId) option.selected = true;
+      published.forEach(function (plan) {
+        var option = el("option", { value: plan.id }, plan.name);
+        if (plan.id === state.a.planChoiceId) option.selected = true;
         planSelect.append(option);
       });
     }
+    if (retailer && !published.length) host.append(el("p", { class: "note" }, retailer.name + " has not published a price for this tariff on the rate card Quick Compare can read."));
     planSelect.addEventListener("change", function () {
       if (!planSelect.value) {
         planPinned = true;
-        commit(C.selectPlan(state, ""));
+        commit(clearPlan(state));
         return;
       }
       setPlan(planSelect.value);
@@ -798,11 +806,7 @@
       var next = C.setContext(state, { tariff: tariffSelect.value });
       openId = "";
       appliedBand = "";
-      if (next.a && next.a.retailerId && next.a.planChoiceId) {
-        var keepInc = next.a.gstInclusive !== false;
-        next = C.selectPlan(next, next.a.planChoiceId);
-        if (!keepInc) next = withGst(next, false);
-      }
+      if (next.a && next.a.retailerId) next = reapplyPublic(next);
       commit(applyTenure(next));
     });
     host.append(tariffSelect);
@@ -963,22 +967,22 @@
     });
   }
 
-  function bestFor(retailerId) {
+  function bestFor(retailerId, planId) {
+    if (!window.QCPublic) return null;
     var retailer = D.retailerById(retailerId);
-    if (!retailer || !D.offerExists(retailer, state.ctx)) return null;
+    if (!retailer || !D.serves(retailer, state.ctx)) return null;
+    var plans = QCPublic.matching(retailerId, state.ctx);
+    var chosen = null;
+    if (planId) plans.forEach(function (plan) { if (plan.id === planId) chosen = plan; });
     var usage = C.resolveUsage(state);
     var best = null;
-    D.rankVariants(retailer, state.ctx).forEach(function (variant) {
-      var bundle = D.buildReferencePlan(retailer.id, state.ctx, variant);
-      if (!bundle) return;
-      var side = C.sideFromBundle(bundle, "live");
+    (chosen ? [chosen] : plans).forEach(function (plan) {
+      var bundle = QCPublic.toBundle(plan, retailer);
+      var side = C.sideFromBundle(bundle, "plan-doc");
       var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
       if (!cost.complete) return;
-      if (!best || cost.normalised < best.cost.normalised) best = { retailer: retailer, bundle: bundle, side: side, cost: cost };
+      if (!best || cost.normalised < best.cost.normalised) best = { retailer: retailer, bundle: bundle, side: side, cost: cost, plan: plan };
     });
-    if (!best) return null;
-    best.side = withDemand(best.side, retailer);
-    best.cost = addDemandCost(best.side, best.cost);
     return best;
   }
 
@@ -1001,6 +1005,7 @@
   function openCompare(row) {
     if (window.QCCompare) window.QCCompare.reset();
     compareWith = row.retailer.id;
+    comparePlanId = row.plan ? row.plan.id : "";
     if (compareExtra === compareWith || compareExtra === state.a.retailerId) compareExtra = "";
     save();
     paint();
@@ -1009,6 +1014,7 @@
   function closeCompare() {
     compareWith = "";
     compareExtra = "";
+    comparePlanId = "";
     save();
     paint();
   }
@@ -1021,7 +1027,7 @@
       host.replaceChildren();
       return;
     }
-    var challenger = bestFor(compareWith);
+    var challenger = bestFor(compareWith, comparePlanId);
     if (!challenger) {
       compareWith = "";
       compareExtra = "";
@@ -1102,7 +1108,7 @@
     var mine = customerCost(built.usage);
     var bestOther = null;
     built.rows.forEach(function (row) {
-      if (row.retailer.id === state.a.retailerId) return;
+      if (row.retailer.id === state.a.retailerId || !row.cost || !row.cost.complete) return;
       if (!bestOther || row.cost.normalised < bestOther.cost.normalised) bestOther = row;
     });
     var recommend = el("p", { class: "recommend" });
@@ -1163,21 +1169,31 @@
       var top = el("div", { class: "card-top" });
       var identity = el("div");
       identity.append(el("h2", { class: ours ? "ink-ours" : "" }, row.retailer.name));
+      if (row.plan) identity.append(el("p", { class: "plan-name" }, row.plan.name));
       var badges = el("div", { class: "badges" });
       if (ours) badges.append(el("span", { class: "badge badge-ours" }, "Our retailer"));
       if (mark === "sell" || mark === "both") badges.append(el("span", { class: "badge badge-sell" }, "Selling"));
       if (current) badges.append(el("span", { class: "badge badge-current" }, "Current"));
       identity.append(badges);
       var figures = el("div", { class: "card-money" });
-      figures.append(el("p", { class: "card-year" }, displayMoney(row.cost.normalised) + " / year"));
-      figures.append(el("p", { class: "card-ref" }, comparisonText(row.cost, built.refCost)));
-      if (mine && row.retailer.id !== state.a.retailerId) {
+      if (row.publicMissing || !row.cost || !row.cost.complete) {
+        figures.append(el("p", { class: "card-year" }, "No published rate"));
+        figures.append(el("p", { class: "card-ref" }, "Nothing on this retailer's public price page matches this tariff."));
+      } else if (row.plan && /free usage/i.test(row.plan.windows || "")) {
+        figures.append(el("p", { class: "card-year" }, displayMoney(row.cost.normalised) + " / year"));
+        figures.append(el("p", { class: "card-ref" }, "Year figure leaves out the free usage window on this offer."));
+      } else {
+        figures.append(el("p", { class: "card-year" }, displayMoney(row.cost.normalised) + " / year"));
+        figures.append(el("p", { class: "card-ref" }, comparisonText(row.cost, built.refCost)));
+      }
+      if (mine && row.cost && row.cost.complete && row.retailer.id !== state.a.retailerId) {
         var gap = mine.normalised - row.cost.normalised;
         var pct = mine.normalised ? Math.round(gap / mine.normalised * 100) : 0;
         var versus = gap > 0 ? pct + "% under current" : gap < 0 ? Math.abs(pct) + "% over current" : "Same as current";
         figures.append(el("p", { class: gap > 0 ? "ink-better" : gap < 0 ? "ink-worse" : "card-ref" }, versus));
       }
-      top.append(identity, figures, viewButton(row));
+      top.append(identity, figures);
+      if (!row.publicMissing && row.cost && row.cost.complete) top.append(viewButton(row));
       var grid = el("div", { class: "rate-grid" });
       fields.forEach(function (field) {
         var retailerInc = inclusiveCents(row.side, field.key);
@@ -1196,6 +1212,8 @@
         grid.append(cell);
       });
       card.append(top, grid);
+      if (row.bundle && row.bundle.exitNote) card.append(el("p", { class: "note" }, row.bundle.exitNote));
+      if (row.bundle && row.bundle.note) card.append(el("p", { class: "note" }, row.bundle.note));
       if (!quiet) list.append(card);
       return card;
     }
@@ -1225,15 +1243,14 @@
     table.tHead.append(head);
     var body = el("tbody");
     var usage = C.resolveUsage(state);
-    var choices = D.planChoices(retailer, state.ctx.tariff);
+    var published = window.QCPublic ? QCPublic.matching(retailer.id, state.ctx) : [];
     var plans = [];
-    choices.forEach(function (choice) {
-      var bundle = D.buildReferencePlan(retailer.id, state.ctx, choice.variant, choice);
-      if (!bundle) return;
-      var side = C.sideFromBundle(bundle, "live");
+    published.forEach(function (plan) {
+      var bundle = QCPublic.toBundle(plan, retailer);
+      var side = C.sideFromBundle(bundle, "plan-doc");
       var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
       if (!cost.complete) return;
-      plans.push({ choice: choice, bundle: bundle, side: side, cost: cost });
+      plans.push({ choice: { label: plan.name }, bundle: bundle, side: side, cost: cost });
     });
     plans.sort(function (a, b) { return a.cost.normalised - b.cost.normalised; });
     plans.forEach(function (plan) {
@@ -1265,12 +1282,8 @@
     var board = document.getElementById("board");
     board.replaceChildren();
     if (!stateLocked) return;
-    var retailer = openId ? D.retailerById(openId) : null;
-    if (retailer && D.serves(retailer, state.ctx)) paintPlans(board, retailer);
-    else {
-      openId = "";
-      paintRank(board, homeRows());
-    }
+    openId = "";
+    paintRank(board, homeRows());
   }
 
   function paintFine() {

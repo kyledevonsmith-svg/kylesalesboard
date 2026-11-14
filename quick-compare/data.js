@@ -1,6 +1,7 @@
 "use strict";
 /* Quick Compare reference data.
-   Sample rates for a sales-floor tool. Not live offers.
+   The home rank does not show these sample factors as a retailer price.
+   Published plans live in public-plans.js, refreshed from retailer websites.
    Electricity caps for NSW, south-east Queensland and South Australia follow the
    AER Default Market Offer 2026–27 (1 July 2026 to 30 June 2027).
    Victorian figures follow the published Victorian Default Offer shape for 2026–27.
@@ -9,7 +10,7 @@
 (function (root) {
   var VERIFIED_ISO = "2026-11-14";
   var VERIFIED_LABEL = "14 November 2026";
-  var DISCLAIMER = "Sample reference rates, last verified 14 November 2026. Not live offers. Do not read these cents to a customer as today's price.";
+  var DISCLAIMER = "Only rates published on a retailer's own website are shown. Where a retailer has not published a price for this tariff, the card says so. A market offer that appears only after an address quote is not invented.";
 
   var NEM = ["NSW", "VIC", "QLD", "SA"];
   var NEM_ACT = ["NSW", "VIC", "QLD", "SA", "ACT"];

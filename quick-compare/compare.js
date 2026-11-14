@@ -48,7 +48,6 @@
     var tariff = D.tariffById(model.ctx.tariff);
     if (tariff && tariff.fields.some(function (field) { return field.key === "demand"; })) return cost;
     var rate = inclusive(side, "demand");
-    if (rate == null) rate = D.demandRate(D.retailerById(side.retailerId), model.ctx);
     var kw = C.num(model.usage && model.usage.demandKw);
     if (kw == null) kw = 15;
     if (rate == null) return cost;

@@ -1,0 +1,27 @@
+name: Refresh published rates
+
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: node scripts/refresh-public-rates.mjs
+      - name: Commit a change when the published prices moved
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add quick-compare/public-plans.js
+          git diff --cached --quiet || git commit -m "Refresh published retailer rates"
+          git push
