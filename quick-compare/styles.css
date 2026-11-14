@@ -175,7 +175,34 @@ h1 { margin: 8px 0 14px; font-size: 22px; font-weight: 700; }
 .banner strong { font-size: 28px; color: var(--green); display: block; }
 .banner.is-worse { background: #fdeeee; border-color: #f0c2c2; }
 .banner.is-worse strong { color: var(--worse); }
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(20, 20, 20, 0.45);
+  overflow: auto;
+  padding: 28px 16px;
+}
+.overlay[hidden] { display: none; }
+.overlay-card {
+  background: #fff;
+  width: min(1080px, 100%);
+  margin: 0 auto;
+  padding: 18px 18px 22px;
+  position: relative;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+}
+.overlay-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: #fff;
+  border: 1px solid #ccc;
+  padding: 4px 10px;
+  cursor: pointer;
+}
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.pair.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .pair article { border: 1px solid #ddd; padding: 10px 12px; }
 .pair h2 { margin: 0 0 4px; font-size: 18px; }
 .bill-box { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 10px 0; }
@@ -217,6 +244,7 @@ h1 { margin: 8px 0 14px; font-size: 22px; font-weight: 700; }
 .network select { height: 28px; margin-left: 6px; border: 1px solid #ccc; background: #fff; }
 
 @media (max-width: 860px) {
+  .pair, .pair.cols-3 { grid-template-columns: 1fr; }
   .split { grid-template-columns: 1fr; }
   .states { grid-template-columns: repeat(4, 1fr); }
   .states button:nth-child(4) { border-right: 0; }

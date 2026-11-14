@@ -19,6 +19,8 @@
   var dismissed = pack.dismissed || {};
   var noteBill = pack.noteBill || null;
   var noteHint = "";
+  var compareWith = pack.compareWith || "";
+  var compareExtra = pack.compareExtra || "";
 
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -44,7 +46,9 @@
       appliedRetailer: "",
       usageLevel: "medium",
       dismissed: {},
-      noteBill: null
+      noteBill: null,
+      compareWith: "",
+      compareExtra: ""
     };
     try {
       var raw = sessionStorage.getItem("qc-home-v1");
@@ -66,7 +70,9 @@
         appliedRetailer: saved.appliedRetailer || "",
         usageLevel: saved.usageLevel || "medium",
         dismissed: saved.dismissed || {},
-        noteBill: saved.noteBill || null
+        noteBill: saved.noteBill || null,
+        compareWith: saved.compareWith || "",
+        compareExtra: saved.compareExtra || ""
       };
     } catch (err) {
       return fresh;
@@ -86,7 +92,9 @@
         appliedRetailer: appliedRetailer,
         usageLevel: usageLevel,
         dismissed: dismissed,
-        noteBill: noteBill
+        noteBill: noteBill,
+        compareWith: compareWith,
+        compareExtra: compareExtra
       }));
     } catch (err) { /* private mode */ }
   }
@@ -201,9 +209,13 @@
         }
       });
       if (!best) return;
+      var isCustomer = retailer.id === state.a.retailerId;
+      var mark = D.tableMark(retailer.id);
+      var isOurs = mark === "ours" || mark === "both";
+      if (state.a.retailerId && !isCustomer && !isOurs) return;
       var rowUsage = inclusiveCents(best.side, primaryRateKey());
       var rowSupply = inclusiveCents(best.side, "supply");
-      if (custUsage != null && custSupply != null && rowUsage != null && rowSupply != null && rowUsage > custUsage && rowSupply > custSupply) {
+      if (!isCustomer && custUsage != null && custSupply != null && rowUsage != null && rowSupply != null && rowUsage > custUsage && rowSupply > custSupply) {
         hiddenWorse += 1;
         return;
       }
@@ -215,7 +227,7 @@
       if (diff) return diff;
       return a.retailer.name.localeCompare(b.retailer.name);
     });
-    return { rows: rows, usage: usage, refCost: refCost && refCost.complete ? refCost : null, hiddenWorse: hiddenWorse, offerMissing: offerMissing };
+    return { rows: rows, usage: usage, refCost: refCost && refCost.complete ? refCost : null, hiddenWorse: hiddenWorse, offerMissing: offerMissing, narrowed: !!state.a.retailerId };
   }
 
   function comparisonText(cost, refCost) {
@@ -229,7 +241,7 @@
 
   function customerCost(usage) {
     var side = state.a;
-    if (!side || !side.name || C.num(side.rates[rateKey()]) == null || C.num(side.rates.supply) == null) return null;
+    if (!side || !side.name || C.num(side.rates[primaryRateKey()]) == null || C.num(side.rates.supply) == null) return null;
     var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
     return cost.complete ? cost : null;
   }
@@ -314,6 +326,26 @@
     return C.setContext(current, { tariff: list[0].id });
   }
 
+  function tariffForFamily(ctx, family) {
+    var available = D.tariffsAvailable(ctx).map(function (tariff) { return tariff.id; });
+    var order = {
+      tou: ["tou", "tou-two", "tou-soak", "biz-tou", "biz-two"],
+      "solar-tou": ["solar-tou", "solar-two", "solar-soak", "tou", "tou-two", "tou-soak"],
+      single: ["single", "biz-single", "gas-single", "biz-gas"],
+      controlled: ["controlled", "controlled-solar"],
+      demand: ["biz-demand"],
+      solar: ["solar", "solar-tou", "solar-two", "solar-soak", "controlled-solar"]
+    };
+    var list = (order[family] || []).slice();
+    if (ctx.customer === "business") {
+      list = list.filter(function (id) { return id.indexOf("biz-") === 0; }).concat(list);
+    }
+    for (var i = 0; i < list.length; i++) {
+      if (available.indexOf(list[i]) !== -1) return list[i];
+    }
+    return "";
+  }
+
   function applyFacts(current) {
     var facts = C.readNoteFacts(notes, new Date());
     if (facts.customer && facts.customer !== current.ctx.customer && !dismissed.customer) {
@@ -322,10 +354,18 @@
     if (facts.postcode && facts.postcode.certain && facts.postcode.value !== current.ctx.postcode && !dismissed["postcode-" + facts.postcode.value]) {
       current = ensureOffer(C.setContext(current, { postcode: facts.postcode.value }));
     }
-    if (facts.tariffId && facts.tariffId !== current.ctx.tariff && !dismissed["tariff-" + facts.tariffId]) {
-      var allowed = D.tariffsAvailable(current.ctx).some(function (item) { return item.id === facts.tariffId; });
-      if (allowed) current = C.setContext(current, { tariff: facts.tariffId });
-      else noteHint = "That tariff is not on file for this distribution zone, so it was left off the list.";
+    if (facts.tariffFamily && !dismissed["tariff-" + facts.tariffFamily]) {
+      var picked = tariffForFamily(current.ctx, facts.tariffFamily);
+      if (picked && picked !== current.ctx.tariff) current = C.setContext(current, { tariff: picked });
+      else if (!picked) noteHint = "That tariff is not on file for this distribution zone, so it was left off the list.";
+    }
+    if (facts.retailerId && !planPinned && !dismissed["retailer-" + facts.retailerId]) {
+      var named = D.retailerById(facts.retailerId);
+      var replace = !current.a.retailerId || facts.retailerExplicit;
+      if (named && replace && D.offerExists(named, current.ctx) && facts.retailerId !== current.a.retailerId) {
+        current = C.selectCurrentRetailer(current, { id: named.id, name: named.name, custom: false });
+        appliedBand = "";
+      }
     }
     if (facts.usageLevel && facts.usageLevel !== usageLevel && !dismissed["level-" + facts.usageLevel]) {
       usageLevel = facts.usageLevel;
@@ -380,6 +420,7 @@
   }
 
   function setLevel(level) {
+    if (window.QCCompare) window.QCCompare.reset();
     usageLevel = level;
     usageTouched = level === "manual";
     if (level === "manual") {
@@ -576,9 +617,9 @@
       var previousBand = previous.tenure ? previous.tenure.band : "";
       var nextBand = nextRead.tenure ? nextRead.tenure.band : "";
       var sameFacts = JSON.stringify({
-        c: previous.customer, p: previous.postcode, t: previous.tariffId, u: previous.usageLevel, b: previous.bill
+        c: previous.customer, p: previous.postcode, t: previous.tariffFamily, u: previous.usageLevel, b: previous.bill, r: previous.retailerId
       }) === JSON.stringify({
-        c: nextRead.customer, p: nextRead.postcode, t: nextRead.tariffId, u: nextRead.usageLevel, b: nextRead.bill
+        c: nextRead.customer, p: nextRead.postcode, t: nextRead.tariffFamily, u: nextRead.usageLevel, b: nextRead.bill, r: nextRead.retailerId
       });
       if (previousBand === nextBand && sameFacts) {
         save();
@@ -595,6 +636,8 @@
     host.append(notesInput);
     var tenure = C.readTenure(notes, new Date());
     host.append(el("p", { class: "note", id: "tenure-read" }, tenure ? tenure.summary : "A time here is a soft match. Within 6 months uses the best plan. A year or more uses the standing offer, equal to the reference price. Residential rates are reviewed on 1 July."));
+    var factLine = C.readNoteFacts(notes, new Date());
+    if (factLine.applied.length) host.append(el("p", { class: "note", id: "facts-read" }, factLine.applied.join(" ")));
 
     var showRates = !!(state.a.planChoiceId || state.a.source === "manual" || C.num(state.a.rates[primaryRateKey()]) != null);
     host.append(el("label", { for: "postcode" }, "Postcode"));
@@ -739,13 +782,25 @@
         var yes = el("button", { type: "button", class: "view" }, "Use");
         yes.addEventListener("click", function () {
           dismissed[item.id] = true;
+          C.readNoteFacts(notes, new Date()).uncertain.forEach(function (other) {
+            if (other.kind === item.kind) dismissed[other.id] = true;
+          });
           var next = state;
           if (item.kind === "postcode") next = ensureOffer(C.setContext(state, { postcode: item.value }));
           if (item.kind === "tariff") {
-            var allowed = D.tariffsAvailable(state.ctx).some(function (tariff) { return tariff.id === item.value; });
-            if (allowed) next = C.setContext(state, { tariff: item.value });
+            var pickedTariff = tariffForFamily(state.ctx, item.value);
+            if (pickedTariff) next = C.setContext(state, { tariff: pickedTariff });
             else noteHint = "That tariff is not on file for this distribution zone, so it was left off the list.";
           }
+          if (item.kind === "retailer") {
+            var namedRetailer = D.retailerById(item.value);
+            if (namedRetailer && D.offerExists(namedRetailer, state.ctx)) {
+              planPinned = false;
+              appliedBand = "";
+              next = C.selectCurrentRetailer(next, { id: namedRetailer.id, name: namedRetailer.name, custom: false });
+            }
+          }
+          if (item.kind === "customer" && item.value) next = ensureOffer(C.setContext(next, { customer: item.value }));
           commit(applyTenure(next));
         });
         row.append(yes);
@@ -761,36 +816,116 @@
     });
   }
 
+  function bestFor(retailerId) {
+    var retailer = D.retailerById(retailerId);
+    if (!retailer || !D.offerExists(retailer, state.ctx)) return null;
+    var usage = C.resolveUsage(state);
+    var best = null;
+    D.rankVariants(retailer, state.ctx).forEach(function (variant) {
+      var bundle = D.buildReferencePlan(retailer.id, state.ctx, variant);
+      if (!bundle) return;
+      var side = C.sideFromBundle(bundle, "live");
+      var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
+      if (!cost.complete) return;
+      if (!best || cost.normalised < best.cost.normalised) best = { retailer: retailer, bundle: bundle, side: side, cost: cost };
+    });
+    return best;
+  }
+
+  function challengerSide(row, letter) {
+    var mark = D.tableMark(row.retailer.id);
+    return {
+      letter: letter,
+      name: row.retailer.name,
+      planName: row.bundle.planName || "",
+      retailerId: row.retailer.id,
+      rates: row.side.rates || {},
+      gstInclusive: true,
+      contract: row.bundle.contract || "",
+      exitNote: row.bundle.exitNote || "",
+      quoteUrl: row.bundle.quoteUrl || "",
+      ours: mark === "ours" || mark === "both"
+    };
+  }
+
   function openCompare(row) {
-    var bundle = row.bundle || {};
-    var payload = {
+    if (window.QCCompare) window.QCCompare.reset();
+    compareWith = row.retailer.id;
+    if (compareExtra === compareWith || compareExtra === state.a.retailerId) compareExtra = "";
+    save();
+    paint();
+  }
+
+  function closeCompare() {
+    compareWith = "";
+    compareExtra = "";
+    save();
+    paint();
+  }
+
+  function paintOverlay() {
+    var host = document.getElementById("overlay");
+    if (!host) return;
+    if (!compareWith) {
+      host.hidden = true;
+      host.replaceChildren();
+      return;
+    }
+    var challenger = bestFor(compareWith);
+    if (!challenger) {
+      compareWith = "";
+      compareExtra = "";
+      host.hidden = true;
+      host.replaceChildren();
+      return;
+    }
+    var extra = compareExtra ? bestFor(compareExtra) : null;
+    if (compareExtra && !extra) compareExtra = "";
+    var taken = [state.a.retailerId || "", compareWith, compareExtra];
+    var choices = D.RETAILERS.filter(function (retailer) {
+      return taken.indexOf(retailer.id) === -1 && D.offerExists(retailer, state.ctx);
+    }).sort(function (a, b) {
+      var ao = D.OURS.indexOf(a.id) === -1 ? 1 : 0;
+      var bo = D.OURS.indexOf(b.id) === -1 ? 1 : 0;
+      if (ao !== bo) return ao - bo;
+      return a.name.localeCompare(b.name);
+    });
+    var sides = [
+      {
+        letter: "A",
+        name: state.a.name || "Current plan",
+        planName: state.a.planLabel || state.a.planName || "Rates as entered",
+        retailerId: state.a.retailerId || "",
+        rates: state.a.rates || {},
+        gstInclusive: state.a.gstInclusive !== false,
+        ours: false
+      },
+      challengerSide(challenger, "B")
+    ];
+    if (extra) sides.push(challengerSide(extra, "C"));
+    host.hidden = false;
+    window.QCCompare.render(host, {
       ctx: state.ctx,
       usage: state.usage,
       usageLevel: usageLevel,
       notes: notes,
+      nmi: C.readNoteFacts(notes, new Date()).nmi,
       bill: noteBill,
-      a: {
-        name: state.a.name || "Current plan",
-        planName: state.a.planName || "",
-        retailerId: state.a.retailerId || "",
-        rates: state.a.rates || {},
-        gstInclusive: state.a.gstInclusive !== false
+      sides: sides,
+      choices: choices.map(function (retailer) { return { id: retailer.id, name: retailer.name, ours: D.OURS.indexOf(retailer.id) !== -1 }; }),
+      onClose: closeCompare,
+      onLevel: function (level) { setLevel(level); },
+      onUsage: function (nextUsage) {
+        usageLevel = "manual";
+        usageTouched = true;
+        commit(Object.assign({}, state, { usage: Object.assign({}, state.usage, nextUsage) }));
       },
-      b: {
-        name: row.retailer.name,
-        planName: bundle.planName || "",
-        retailerId: row.retailer.id,
-        rates: row.side.rates || {},
-        gstInclusive: true,
-        contract: bundle.contract || "",
-        exitNote: bundle.exitNote || "",
-        quoteUrl: bundle.quoteUrl || "",
-        note: bundle.note || "",
-        ours: D.tableMark(row.retailer.id) === "ours" || D.tableMark(row.retailer.id) === "both"
+      onAdd: function (id) {
+        compareExtra = id || "";
+        save();
+        paint();
       }
-    };
-    try { sessionStorage.setItem("qc-compare-v1", JSON.stringify(payload)); } catch (err) { /* private mode */ }
-    window.open("compare.html", "qcCompare", "popup,width=1080,height=860");
+    });
   }
 
   function viewButton(row) {
@@ -877,6 +1012,12 @@
     });
     table.append(body);
     board.append(table);
+    if (built.narrowed && built.rows.length) {
+      var onlyCustomer = built.rows.length === 1 && built.rows[0].retailer.id === state.a.retailerId && built.hiddenWorse;
+      board.append(el("p", { class: "note" }, onlyCustomer
+        ? "Our retailers are dearer on both the usage rate and the daily charge, so the list keeps only the customer's retailer."
+        : "The customer's retailer stays on the list with our retailers that still compete. Everyone else is hidden."));
+    }
     if (!built.rows.length) {
       var empty = "No reference plan matches this state.";
       if (state.ctx.fuel === "gas" && state.ctx.region === "NT") empty = "No reference gas market is included for the Northern Territory.";
@@ -958,7 +1099,7 @@
     bits.push("Ranked on " + (usage != null ? Number(usage).toLocaleString("en-AU") : "the") + " " + usageUnit() + (usageTouched ? " from Customer." : " until Usage is edited."));
     bits.push("Comparison Price is against the " + refWord() + " for this network, including supply.");
     bits.push("^ Daily charge is cents per day.");
-    bits.push("Green figures are lower than the customer. Orange names are our retailers: Dodo, Blue NRG, 1st Energy, Next Business Energy, Momentum, Alinta, ENGIE and AGL. A retailer is hidden when this zone has no plan of the selected type, or when both the usage rate and the daily charge are higher.");
+    bits.push("Green figures are lower than the customer. Orange names are our retailers: Dodo, Blue NRG, 1st Energy, Next Business Energy, Momentum, Alinta, ENGIE and AGL. Once a retailer is chosen, the list keeps that retailer and our retailers that still compete. A retailer is also hidden when this zone has no plan of the selected type, or when both the usage rate and the daily charge are higher.");
     bits.push(D.DISCLAIMER);
     host.textContent = bits.join(" ");
   }
@@ -970,7 +1111,12 @@
     paintBoard();
     paintCustomer();
     paintFine();
+    paintOverlay();
   }
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && compareWith) closeCompare();
+  });
 
   if (!state.usage[usageKey()] && !usageTouched) {
     state = fillUsage(state);

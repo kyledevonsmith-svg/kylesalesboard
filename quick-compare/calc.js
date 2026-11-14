@@ -1333,65 +1333,156 @@
     return date;
   }
 
+  function escapeReg(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function postcodeContext(raw, index) {
+    var before = raw.slice(Math.max(0, index - 48), index);
+    var after = raw.slice(index + 4, index + 12);
+    var near = (before + " " + after).toLowerCase();
+    if (/post\s?code|\bpc\b/.test(near)) return "labelled";
+    if (/\b(nsw|vic|qld|sa|wa|tas|act|nt)\b/.test(before.slice(-10).toLowerCase() + " " + after.toLowerCase())) return "address";
+    if (/\b(street|st|road|rd|avenue|ave|drive|dr|court|cct|place|pl|way|crescent|cres|parade|pde|highway|hwy|terrace|tce|boulevard|blvd|lane|ln)\b/.test(before.toLowerCase())) return "address";
+    if (/,\s*$/.test(before.slice(-12))) return "address";
+    return "";
+  }
+
+  function namedRetailers(text) {
+    var hits = [];
+    var seen = {};
+    D.RETAILERS.forEach(function (retailer) {
+      var labels = [retailer.name].concat(retailer.aliases || []);
+      var matched = labels.some(function (label) {
+        if (!label || label.length < 3) return false;
+        if (/^\d/.test(label) && label.indexOf(" ") === -1) return false;
+        return new RegExp("\\b" + escapeReg(label) + "\\b", "i").test(text);
+      });
+      if (!matched || seen[retailer.id]) return;
+      seen[retailer.id] = true;
+      hits.push(retailer);
+    });
+    var lead = String(text).match(/\b(?:with|retailer|currently|customer)\s+([a-z0-9][a-z0-9'&+-]{2,})/i);
+    var explicit = [];
+    if (lead) {
+      var word = lead[1].toLowerCase();
+      D.RETAILERS.forEach(function (retailer) {
+        var labels = [retailer.name].concat(retailer.aliases || []);
+        var starts = labels.some(function (label) {
+          return String(label || "").toLowerCase().split(/\s+/)[0] === word;
+        });
+        if (starts) explicit.push(retailer);
+      });
+    }
+    return { any: hits, explicit: explicit };
+  }
+
   function readNoteFacts(text, today) {
     var raw = String(text || "");
     var lower = raw.toLowerCase();
     var uncertain = [];
-    var postcode = null;
-    var seen = {};
+    var applied = [];
     var match;
+    var foundCodes = [];
+    var seenCodes = {};
     var postcodeRe = /\b(\d{4})\b/g;
     while ((match = postcodeRe.exec(raw))) {
       var digits = match[1];
-      if (digits >= "2016" && digits <= "2035") {
-        var around = lower.slice(Math.max(0, match.index - 12), match.index + 12);
-        if (!/post\s?code|\bpc\b/.test(around)) continue;
-      }
-      if (!D.suggestFromPostcode(digits) || seen[digits]) continue;
-      seen[digits] = true;
-      var labelled = /post\s?code|\bpc\b/i.test(raw.slice(Math.max(0, match.index - 16), match.index + 4));
-      if (!postcode) postcode = { value: digits, certain: labelled };
-      else uncertain.push({ id: "postcode-many", question: "Notes mention more than one postcode. Use " + digits + " as well?" });
+      var context = postcodeContext(raw, match.index);
+      if (digits >= "2016" && digits <= "2035" && context !== "labelled" && context !== "address") continue;
+      if (!D.suggestFromPostcode(digits) || seenCodes[digits]) continue;
+      seenCodes[digits] = true;
+      foundCodes.push({ value: digits, context: context || (foundCodes.length ? "" : "only") });
     }
-    if (postcode && !postcode.certain) {
-      uncertain.push({ id: "postcode-" + postcode.value, kind: "postcode", value: postcode.value, question: "Notes mention " + postcode.value + ". Use that postcode?" });
-      postcode = null;
+    var postcode = null;
+    if (foundCodes.length === 1) {
+      postcode = { value: foundCodes[0].value, certain: true, from: foundCodes[0].context === "address" ? "address" : "note" };
+      applied.push(postcode.from === "address"
+        ? "Postcode " + postcode.value + " is taken from the address."
+        : "Postcode " + postcode.value + " is used.");
+    } else if (foundCodes.length > 1) {
+      foundCodes.forEach(function (item) {
+        uncertain.push({ id: "postcode-" + item.value, kind: "postcode", value: item.value, question: "Notes include postcode " + item.value + ". Use that one?" });
+      });
     }
 
     var bill = null;
     var moneyRe = /\$\s*(\d{1,5}(?:,\d{3})*(?:\.\d{2})?)/g;
     while ((match = moneyRe.exec(raw))) {
       var amount = Number(match[1].replace(/,/g, ""));
-      if (!isFinite(amount) || amount <= 0) continue;
-      var windowText = lower.slice(Math.max(0, match.index - 28), Math.min(lower.length, match.index + match[0].length + 28));
-      var period = /quarter/.test(windowText) ? "quarter" : (/year|annual|p\.?a\b/.test(windowText) ? "year" : (/month|\/\s*mo|p\.?m\b/.test(windowText) ? "month" : ""));
+      if (!isFinite(amount) || amount < 30) continue;
+      var windowText = lower.slice(Math.max(0, match.index - 36), Math.min(lower.length, match.index + match[0].length + 28));
+      var period = /quarter/.test(windowText) ? "quarter"
+        : (/\b(per|a|each|\/)\s*year\b|\bannual(?:ly)?\b|\byearly\b|\bp\.?a\b/.test(windowText) ? "year"
+        : (/\b(per|a|each|\/)\s*month\b|\bmonthly\b|\bp\.?m\b/.test(windowText) ? "month" : ""));
+      var calledBill = /bill|invoice/.test(windowText);
       if (period) {
         if (!bill) bill = { amount: amount, period: period, certain: true };
-      } else if (!bill) {
-        uncertain.push({ id: "bill-" + amount, kind: "bill", amount: amount, question: "Notes mention a bill of $" + amount + ". Is that per month, per quarter, or per year?" });
+      } else if (calledBill && !bill) {
+        bill = { amount: amount, period: "quarter", certain: true, assumed: true };
+      } else if (!bill && !calledBill) {
+        uncertain.push({ id: "bill-" + amount, kind: "bill", amount: amount, question: "Notes mention $" + amount + " without saying it is the bill. Add it as a monthly, quarterly, or yearly bill?" });
       }
+    }
+    if (bill && bill.certain) {
+      applied.push(bill.assumed
+        ? "The bill of $" + bill.amount + " is read as quarterly, the usual energy bill."
+        : "Bill of $" + bill.amount + " per " + bill.period + " is used.");
     }
 
     var customer = null;
-    if (/\bbusiness\b|\bcommercial\b/.test(lower)) customer = "business";
-    else if (/\bresidential\b|\bhousehold\b|\bhome\b/.test(lower)) customer = "residential";
+    var saysBusiness = /\bbusiness\b|\bcommercial\b/.test(lower);
+    var saysResidential = /\bresidential\b|\bhousehold\b/.test(lower);
+    if (saysBusiness && saysResidential) {
+      uncertain.push({ id: "customer-business", kind: "customer", value: "business", question: "Notes mention business and residential. Use business?" });
+      uncertain.push({ id: "customer-residential", kind: "customer", value: "residential", question: "Notes mention business and residential. Use residential?" });
+    } else if (saysBusiness) {
+      customer = "business";
+      applied.push("Read as a business account.");
+    } else if (saysResidential) {
+      customer = "residential";
+      applied.push("Read as a residential account.");
+    }
 
     var usageLevel = null;
     if (/\b(low|small)\s+(user|usage|household)\b/.test(lower)) usageLevel = "low";
     else if (/\b(high|large|big)\s+(user|usage|household)\b/.test(lower)) usageLevel = "high";
     else if (/\bmedium\s+(user|usage|household)\b/.test(lower)) usageLevel = "medium";
+    if (usageLevel) applied.push("Usage is set to " + usageLevel + ".");
 
-    var tariffId = null;
-    if (/\bdemand\b/.test(lower)) tariffId = "biz-demand";
-    else if (/\btime of use\b|\btou\b/.test(lower)) tariffId = "tou";
-    else if (/\bcontrolled load\b|\bhot water\b/.test(lower)) tariffId = "controlled";
-    else if (/\bsingle rate\b|\bflat rate\b/.test(lower)) tariffId = "single";
-    else if (/\bsolar\b/.test(lower)) tariffId = "solar";
-    if (tariffId && !/\b(on|tariff|meter|plan|has|with)\b/.test(lower)) {
-      var tariffNames = { "biz-demand": "demand", tou: "time of use", controlled: "controlled load", single: "single rate", solar: "solar" };
-      uncertain.push({ id: "tariff-" + tariffId, kind: "tariff", value: tariffId, question: "Notes mention " + (tariffNames[tariffId] || tariffId) + ". Use that tariff?" });
-      tariffId = null;
+    var tariffFamily = null;
+    var tou = /\btime of use\b|\btou\b/.test(lower);
+    var solarStrong = /\bsolar\s+(tariff|plan|feed)|\bfeed-?in\b|\bwith solar\b|\bhas solar\b|\bsolar panels\b/.test(lower);
+    var solarWeak = /\bsolar\b/.test(lower) && !solarStrong;
+    if (/\bdemand\s+(tariff|charge|plan)\b|\bkw\s*demand\b|\bkva\b/.test(lower)) tariffFamily = "demand";
+    else if (tou && (solarStrong || solarWeak)) tariffFamily = "solar-tou";
+    else if (tou) tariffFamily = "tou";
+    else if (/\bcontrolled load\b|\bhot water\b/.test(lower)) tariffFamily = "controlled";
+    else if (/\bsingle rate\b|\bflat rate\b/.test(lower)) tariffFamily = "single";
+    else if (solarStrong) tariffFamily = "solar";
+    else if (solarWeak) {
+      uncertain.push({ id: "tariff-solar", kind: "tariff", value: "solar", question: "Notes mention solar. Use a solar tariff?" });
     }
+    var tariffWords = { tou: "time of use", "solar-tou": "solar time of use", single: "single rate", controlled: "controlled load", demand: "demand", solar: "solar" };
+    if (tariffFamily) applied.push("Tariff read as " + (tariffWords[tariffFamily] || tariffFamily) + ".");
+
+    var named = namedRetailers(raw);
+    var retailerId = null;
+    var retailerExplicit = false;
+    var chosenRetailers = named.explicit.length ? named.explicit : named.any;
+    if (chosenRetailers.length === 1) {
+      retailerId = chosenRetailers[0].id;
+      retailerExplicit = named.explicit.length === 1;
+      applied.push(chosenRetailers[0].name + " is read as the customer's retailer.");
+    } else if (chosenRetailers.length > 1) {
+      chosenRetailers.forEach(function (retailer) {
+        uncertain.push({ id: "retailer-" + retailer.id, kind: "retailer", value: retailer.id, question: "Notes name " + retailer.name + ". Use them as the customer?" });
+      });
+    }
+
+    var nmiMatch = raw.match(/\b(?:nmi|mirn)\s*[:#]?\s*([A-Z0-9]{10,11})\b/i);
+    var nmi = nmiMatch ? nmiMatch[1].toUpperCase() : "";
+    if (nmi) applied.push("NMI " + nmi + " is noted.");
 
     return {
       tenure: readTenure(raw, today),
@@ -1399,7 +1490,11 @@
       bill: bill,
       customer: customer,
       usageLevel: usageLevel,
-      tariffId: tariffId,
+      tariffFamily: tariffFamily,
+      retailerId: retailerId,
+      retailerExplicit: retailerExplicit,
+      nmi: nmi,
+      applied: applied,
       uncertain: uncertain
     };
   }
