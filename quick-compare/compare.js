@@ -43,7 +43,83 @@
       var value = inclusive(side, key);
       if (value != null) prepared.rates[key] = value;
     });
-    return C.annualCost(model.ctx.tariff, prepared, C.resolveUsage({ ctx: model.ctx, usage: model.usage, a: prepared, b: C.emptySide() }).resolved);
+    var cost = C.annualCost(model.ctx.tariff, prepared, C.resolveUsage({ ctx: model.ctx, usage: model.usage, a: prepared, b: C.emptySide() }).resolved);
+    if (!model.showDemand || !model.ctx || model.ctx.fuel !== "electricity" || !cost.complete) return cost;
+    var tariff = D.tariffById(model.ctx.tariff);
+    if (tariff && tariff.fields.some(function (field) { return field.key === "demand"; })) return cost;
+    var rate = inclusive(side, "demand");
+    if (rate == null) rate = D.demandRate(D.retailerById(side.retailerId), model.ctx);
+    var kw = C.num(model.usage && model.usage.demandKw);
+    if (kw == null) kw = 15;
+    if (rate == null) return cost;
+    var extra = rate * kw * 12;
+    return Object.assign({}, cost, { normalised: cost.normalised + extra, total: cost.total + extra });
+  }
+
+  function compareFields(model) {
+    var tariff = D.tariffById(model.ctx.tariff);
+    if (!tariff) return [];
+    var fields = tariff.fields.filter(function (field) {
+      return field.kind !== "text" && field.kind !== "gst" && field.kind !== "limit" && field.per !== "year";
+    });
+    if (model.showDemand && model.ctx.fuel === "electricity" && !fields.some(function (field) { return field.key === "demand"; })) {
+      fields = fields.concat([{ key: "demand", label: "Demand", unit: "$/kW/month", per: "kw-month", kind: "lower" }]);
+    }
+    return fields;
+  }
+
+  function showRate(field, value) {
+    if (value == null || !isFinite(value)) return "—";
+    if (field.per === "kw-month" || field.per === "year") return "$" + value.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return cents(value);
+  }
+
+  function talkingPoints(model, sides, costs, fields) {
+    var points = [];
+    var a = sides[0];
+    var costA = costs[0];
+    if (!a || !costA || !costA.complete) {
+      points.push("Choose the customer's plan so the cents on the left are theirs. Then read the green numbers as the reason to move.");
+      return points;
+    }
+    var ranked = sides.slice(1).map(function (side, index) {
+      return { side: side, cost: costs[index + 1], gap: costA.normalised - (costs[index + 1] && costs[index + 1].complete ? costs[index + 1].normalised : costA.normalised) };
+    }).filter(function (item) { return item.cost && item.cost.complete; });
+    ranked.sort(function (x, y) { return y.gap - x.gap; });
+    var best = ranked[0];
+    if (best && best.gap > 0) {
+      var pct = costA.normalised ? Math.round(best.gap / costA.normalised * 100) : 0;
+      points.push("Open with the saving. " + best.side.name + " is " + money(best.gap) + " a year less, about " + money(best.gap / 12) + " a month, " + pct + "% under " + (a.name || "the current plan") + ".");
+    } else if (best) {
+      points.push("Be straight. On this usage " + (a.name || "the current plan") + " is the cheaper one. Ask whether more of the bill falls in peak, or whether the bill in front of you is higher than this estimate, before you push a switch.");
+    }
+    if (ranked.length > 1 && ranked[0].gap > 0 && ranked[1].gap > 0) {
+      points.push("If they hesitate on " + ranked[0].side.name + ", " + ranked[1].side.name + " is still " + money(ranked[1].gap) + " a year under the current plan.");
+    }
+    var wins = [];
+    var losses = [];
+    fields.forEach(function (field) {
+      if (!best) return;
+      var left = inclusive(a, field.key);
+      var right = inclusive(best.side, field.key);
+      if (left == null || right == null || left === 0) return;
+      var diff = gapText(left, right, field.kind !== "higher");
+      if (!diff.klass) return;
+      var line = field.label + " is " + diff.text + " (" + showRate(field, left) + " against " + showRate(field, right) + ")";
+      if (diff.klass === "ink-better") wins.push({ line: line, pct: Math.abs(left - right) / Math.abs(left) });
+      else losses.push(line);
+    });
+    wins.sort(function (x, y) { return y.pct - x.pct; });
+    if (wins.length) points.push("Point at the biggest rate cut: " + wins[0].line + ".");
+    if (losses.length) points.push("If they pick the higher line, answer it: " + losses[0] + ". The yearly total already includes that.");
+    if (best && best.side.ours) points.push(best.side.name + " is one of our retailers. You can move them onto it on this call.");
+    if (best && best.side.exitNote && /no exit fee/i.test(best.side.exitNote)) points.push("There is no exit fee on this sample. Say you will confirm that on the quote before they sign.");
+    if (model.showDemand) {
+      var kw = C.num(model.usage.demandKw) || 15;
+      points.push("Demand is on, at " + kw + " kW. Read the demand line as dollars per kilowatt each month, then back to the yearly saving so it does not get lost in the cents.");
+    }
+    points.push("Close by asking them to find the same lines on the bill while you read these figures. The cents include GST unless Excluding GST is selected.");
+    return points;
   }
 
   function gapText(left, right, lowerIsBetter) {
@@ -76,30 +152,32 @@
     card.append(el("h1", {}, (a && a.name ? a.name : "Current") + (names ? " compared with " + names : "")));
 
     var costs = sides.map(function (side) { return sideCost(model, side); });
-    if (costs[0] && costs[0].complete && others.length) {
-      var best = null;
-      others.forEach(function (side, index) {
-        var cost = costs[index + 1];
-        if (!cost || !cost.complete) return;
+    var fields = compareFields(model);
+    var bestGap = null;
+    others.forEach(function (side, index) {
+      var cost = costs[index + 1];
+      if (!costs[0] || !costs[0].complete || !cost || !cost.complete) return;
+      var gap = costs[0].normalised - cost.normalised;
+      if (!bestGap || gap > bestGap.gap) bestGap = { side: side, gap: gap };
+    });
+    var board = el("div", { class: "scoreboard" });
+    sides.forEach(function (side, index) {
+      var cost = costs[index];
+      var score = el("article", { class: "score" + (bestGap && bestGap.gap > 0 && side === bestGap.side ? " is-best" : "") });
+      score.append(el("h2", { class: side.ours ? "ink-ours" : "" }, side.letter + " · " + (side.name || "Plan")));
+      score.append(el("p", { class: "year" }, cost && cost.complete ? money(cost.normalised) + " / year" : "Rates needed"));
+      if (cost && cost.complete) score.append(el("p", { class: "month" }, money(cost.normalised / 12) + " a month"));
+      if (index > 0 && costs[0] && costs[0].complete && cost && cost.complete) {
         var gap = costs[0].normalised - cost.normalised;
-        if (!best || gap > best.gap) best = { side: side, cost: cost, gap: gap };
-      });
-      if (best) {
-        var pct = costs[0].normalised ? Math.round(best.gap / costs[0].normalised * 100) : 0;
-        var banner = el("div", { class: "banner" + (best.gap < 0 ? " is-worse" : "") });
-        if (best.gap > 0) {
-          banner.append(el("strong", {}, "Save " + money(best.gap) + " a year"));
-          banner.append(el("p", {}, money(best.gap / 12) + " a month, " + pct + "% under " + (a.name || "the current plan") + ". " + best.side.name + " is " + money(best.cost.normalised) + " a year against " + money(costs[0].normalised) + "."));
-        } else if (best.gap < 0) {
-          banner.append(el("strong", {}, "The current plan is cheaper"));
-          banner.append(el("p", {}, best.side.name + " costs " + money(-best.gap) + " more a year on this usage."));
-        } else {
-          banner.append(el("strong", {}, "Same annual cost"));
-          banner.append(el("p", {}, "These plans come out together on this usage."));
-        }
-        card.append(banner);
+        var pct = costs[0].normalised ? Math.round(gap / costs[0].normalised * 100) : 0;
+        var line = gap > 0 ? "Save " + money(gap) + " · " + pct + "% under A" : gap < 0 ? money(-gap) + " more than A" : "Same as A";
+        score.append(el("p", { class: gap > 0 ? "ink-better" : gap < 0 ? "ink-worse" : "month" }, line));
       }
-    }
+      score.append(el("p", { class: "month" }, side.planName || ""));
+      if (side.ours) score.append(el("p", { class: "month" }, "One of our retailers"));
+      board.append(score);
+    });
+    card.append(board);
 
     var levels = el("div", { class: "levels" });
     [["low", "Low user"], ["medium", "Medium user"], ["high", "High user"]].forEach(function (pair) {
@@ -123,6 +201,14 @@
     var go = el("button", { type: "button", class: "view is-ours" }, "Work out usage");
     go.addEventListener("click", function () { applyBill(model); });
     billBox.append(amount, period, go);
+    if (model.ctx.fuel === "electricity") {
+      var demandLabel = el("label", { class: "demand-toggle", for: "compare-demand" });
+      var demandBox = el("input", { type: "checkbox", id: "compare-demand" });
+      demandBox.checked = !!model.showDemand;
+      demandBox.addEventListener("change", function () { if (model.onDemand) model.onDemand(demandBox.checked); });
+      demandLabel.append(demandBox, document.createTextNode(" Demand"));
+      billBox.append(demandLabel);
+    }
     card.append(billBox);
     if (appliedBill && appliedBill.error) card.append(el("p", { class: "confirm" }, appliedBill.error));
     if (appliedBill && appliedBill.annual) {
@@ -149,20 +235,6 @@
     }
     card.append(add);
 
-    var pair = el("div", { class: "pair" + (sides.length > 2 ? " cols-3" : "") });
-    sides.forEach(function (side) {
-      var article = el("article");
-      article.append(el("h2", { class: side.ours ? "ink-ours" : "" }, side.letter + " · " + (side.name || "Plan")));
-      article.append(el("p", {}, side.planName || "Rates as entered"));
-      if (side.ours) article.append(el("p", { class: "note" }, "One of our retailers."));
-      if (side.contract) article.append(el("p", {}, side.contract));
-      if (side.exitNote) article.append(el("p", {}, side.exitNote));
-      if (side.quoteUrl) article.append(el("a", { href: side.quoteUrl, target: "_blank", rel: "noopener" }, "Open the retailer quote page"));
-      pair.append(article);
-    });
-    card.append(pair);
-
-    var tariff = D.tariffById(model.ctx.tariff);
     var table = el("table", { class: "rank" });
     var head = el("tr");
     head.append(el("th", {}, ""));
@@ -171,24 +243,22 @@
     table.append(el("thead"));
     table.tHead.append(head);
     var body = el("tbody");
-    if (tariff) {
-      tariff.fields.forEach(function (field) {
-        if (field.kind === "text" || field.kind === "gst" || field.kind === "limit") return;
-        var values = sides.map(function (side) { return inclusive(side, field.key); });
-        if (values.every(function (value) { return value == null; })) return;
-        var tr = el("tr");
-        tr.append(el("td", {}, field.label));
-        values.forEach(function (value, index) {
-          var shown = field.per === "year" ? money(value || 0) : cents(value);
-          var klass = index === 0 ? "" : gapText(values[0], value, field.kind !== "higher").klass;
-          tr.append(el("td", { class: klass }, shown));
-        });
-        others.forEach(function (side, index) {
-          var diff = gapText(values[0], values[index + 1], field.kind !== "higher");
-          tr.append(el("td", { class: diff.klass }, diff.text));
-        });
-        body.append(tr);
+    var tariff = D.tariffById(model.ctx.tariff);
+    fields.forEach(function (field) {
+      var values = sides.map(function (side) { return inclusive(side, field.key); });
+      var tr = el("tr");
+      tr.append(el("td", {}, field.label));
+      values.forEach(function (value, index) {
+        var klass = index === 0 ? "" : gapText(values[0], value, field.kind !== "higher").klass;
+        tr.append(el("td", { class: klass }, showRate(field, value)));
       });
+      others.forEach(function (side, index) {
+        var diff = gapText(values[0], values[index + 1], field.kind !== "higher");
+        tr.append(el("td", { class: diff.klass }, diff.text));
+      });
+      body.append(tr);
+    });
+    if (tariff) {
       tariff.usage.forEach(function (field) {
         var tr = el("tr");
         tr.append(el("td", {}, field.label));
@@ -214,6 +284,23 @@
     }
     table.append(body);
     card.append(table);
+
+    var quotes = el("p", { class: "note" });
+    sides.forEach(function (side) {
+      if (!side.quoteUrl) return;
+      var link = el("a", { href: side.quoteUrl, target: "_blank", rel: "noopener" }, side.name + " quote");
+      quotes.append(link, document.createTextNode("  "));
+    });
+    if (quotes.childNodes.length) card.append(quotes);
+
+    var talk = el("section", { class: "talk" });
+    talk.append(el("h2", {}, "Say this"));
+    var list = el("ol");
+    talkingPoints(model, sides, costs, fields).forEach(function (point) {
+      list.append(el("li", {}, point));
+    });
+    talk.append(list);
+    card.append(talk);
 
     if (model.nmi) card.append(el("p", { class: "note" }, "NMI from the notes: " + model.nmi));
     if (model.notes) card.append(el("p", { class: "note" }, "Notes: " + model.notes));

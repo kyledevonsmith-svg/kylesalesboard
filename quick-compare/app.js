@@ -21,6 +21,7 @@
   var noteHint = "";
   var compareWith = pack.compareWith || "";
   var compareExtra = pack.compareExtra || "";
+  var showDemand = !!pack.showDemand;
 
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -48,7 +49,8 @@
       dismissed: {},
       noteBill: null,
       compareWith: "",
-      compareExtra: ""
+      compareExtra: "",
+      showDemand: false
     };
     try {
       var raw = sessionStorage.getItem("qc-home-v1");
@@ -72,7 +74,8 @@
         dismissed: saved.dismissed || {},
         noteBill: saved.noteBill || null,
         compareWith: saved.compareWith || "",
-        compareExtra: saved.compareExtra || ""
+        compareExtra: saved.compareExtra || "",
+        showDemand: !!saved.showDemand
       };
     } catch (err) {
       return fresh;
@@ -94,13 +97,29 @@
         dismissed: dismissed,
         noteBill: noteBill,
         compareWith: compareWith,
-        compareExtra: compareExtra
+        compareExtra: compareExtra,
+        showDemand: showDemand
       }));
     } catch (err) { /* private mode */ }
   }
 
+  function keepDemand(current) {
+    if (!showDemand || !current || current.ctx.fuel !== "electricity") return current;
+    if (C.num(current.usage.demandKw) == null) current = C.setUsage(current, "demandKw", "15");
+    if (C.num(current.a && current.a.rates.demand) != null) return current;
+    var retailer = D.retailerById(current.a.retailerId);
+    var rate = retailer ? D.demandRate(retailer, current.ctx) : null;
+    if (rate == null) {
+      var network = D.networkById(current.ctx.network);
+      rate = network ? network.demand : null;
+    }
+    if (rate == null || !current.a) return current;
+    var rates = Object.assign({}, current.a.rates, { demand: String(rate) });
+    return Object.assign({}, current, { a: Object.assign({}, current.a, { rates: rates }) });
+  }
+
   function commit(next) {
-    state = next;
+    state = keepDemand(next);
     save();
     paint();
   }
@@ -171,6 +190,47 @@
     return Object.assign({}, current, { a: nextSide });
   }
 
+  function rateFields() {
+    var tariff = D.tariffById(state.ctx.tariff);
+    if (!tariff) return [];
+    var fields = tariff.fields.filter(function (field) {
+      return field.kind !== "text" && field.kind !== "gst" && field.kind !== "limit" && field.per !== "year";
+    });
+    if (showDemand && state.ctx.fuel === "electricity" && !fields.some(function (field) { return field.key === "demand"; })) {
+      fields.push({ key: "demand", label: "Demand", unit: "$/kW/month", per: "kw-month", kind: "lower" });
+    }
+    return fields;
+  }
+
+  function addDemandCost(side, cost) {
+    if (!showDemand || state.ctx.fuel !== "electricity" || !cost || !cost.complete) return cost;
+    var tariff = D.tariffById(state.ctx.tariff);
+    if (tariff && tariff.fields.some(function (field) { return field.key === "demand"; })) return cost;
+    var rate = inclusiveCents(side, "demand");
+    if (rate == null) return cost;
+    var kw = C.num(state.usage.demandKw);
+    if (kw == null) kw = 15;
+    var extra = rate * kw * 12;
+    return Object.assign({}, cost, { total: cost.total + extra, normalised: cost.normalised + extra });
+  }
+
+  function withDemand(side, retailer) {
+    if (!showDemand || state.ctx.fuel !== "electricity") return side;
+    if (C.num(side.rates && side.rates.demand) != null) return side;
+    var rate = D.demandRate(retailer, state.ctx);
+    if (rate == null) return side;
+    return Object.assign({}, side, { rates: Object.assign({}, side.rates, { demand: rate }) });
+  }
+
+  function displayField(field, inclusiveValue) {
+    if (inclusiveValue == null || !Number.isFinite(inclusiveValue)) return "—";
+    if (field.per === "kw-month" || field.per === "year") {
+      var show = state.a && state.a.gstInclusive === false ? inclusiveValue / 1.1 : inclusiveValue;
+      return "$" + show.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    return displayCents(inclusiveValue);
+  }
+
   function referenceSide(ctx) {
     var side = C.emptySide();
     side.gstInclusive = true;
@@ -180,9 +240,11 @@
       side.rates = { supply: region.gas.supply, gasUsage: region.gas.usage };
       return side;
     }
-    var network = D.networkById(ctx.network);
-    if (!network || !network.flat) return null;
-    side.rates = { usage: network.flat.usage, supply: network.flat.supply };
+    var retailer = D.RETAILERS.filter(function (item) { return D.serves(item, ctx) && !item.publishedDirect; })[0];
+    if (!retailer) return null;
+    var bundle = D.buildReferencePlan(retailer.id, ctx, "standing");
+    if (!bundle) return null;
+    side.rates = bundle.rates;
     return side;
   }
 
@@ -190,6 +252,15 @@
     var usage = C.resolveUsage(state);
     var ref = referenceSide(state.ctx);
     var refCost = ref ? C.annualCost(state.ctx.tariff, ref, usage.resolved) : null;
+    if (refCost && refCost.complete && showDemand && state.ctx.fuel === "electricity") {
+      var network = D.networkById(state.ctx.network);
+      var kw = C.num(state.usage.demandKw);
+      if (kw == null) kw = 15;
+      if (network && network.demand != null && !(D.tariffById(state.ctx.tariff) && D.tariffById(state.ctx.tariff).fields.some(function (field) { return field.key === "demand"; }))) {
+        var extra = network.demand * kw * 12;
+        refCost = Object.assign({}, refCost, { total: refCost.total + extra, normalised: refCost.normalised + extra });
+      }
+    }
     var rows = [];
     var hiddenWorse = 0;
     var offerMissing = !D.tariffsAvailable(state.ctx).some(function (tariff) { return tariff.id === state.ctx.tariff; });
@@ -209,6 +280,8 @@
         }
       });
       if (!best) return;
+      best.side = withDemand(best.side, retailer);
+      best.cost = addDemandCost(best.side, best.cost);
       var isCustomer = retailer.id === state.a.retailerId;
       var mark = D.tableMark(retailer.id);
       var isOurs = mark === "ours" || mark === "both";
@@ -243,7 +316,8 @@
     var side = state.a;
     if (!side || !side.name || C.num(side.rates[primaryRateKey()]) == null || C.num(side.rates.supply) == null) return null;
     var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
-    return cost.complete ? cost : null;
+    if (!cost.complete) return null;
+    return addDemandCost(withDemand(side, D.retailerById(side.retailerId)), cost);
   }
 
   function retailersNow() {
@@ -673,6 +747,24 @@
       commit(applyTenure(next));
     });
     host.append(tariffSelect);
+    if (state.ctx.fuel === "electricity") {
+      var demandLabel = el("label", { class: "demand-toggle", for: "demand-toggle" });
+      var demandBox = el("input", { type: "checkbox", id: "demand-toggle" });
+      demandBox.checked = showDemand;
+      demandBox.addEventListener("change", function () {
+        showDemand = demandBox.checked;
+        if (showDemand && C.num(state.usage.demandKw) == null) {
+          state = C.setUsage(state, "demandKw", "15");
+        }
+        if (showDemand && C.num(state.a.rates.demand) == null) {
+          var network = D.networkById(state.ctx.network);
+          if (network && network.demand != null) state = C.enterRate(state, "a", "demand", String(network.demand));
+        }
+        commit(state);
+      });
+      demandLabel.append(demandBox, document.createTextNode(" Include demand"));
+      host.append(demandLabel);
+    }
     paintConfirms(host);
     if (noteHint) host.append(el("p", { class: "note" }, noteHint));
 
@@ -706,32 +798,29 @@
       host.append(usageInput);
       host.append(el("p", { class: "note" }, usageUnit() + ". Low is 55% of the benchmark, medium is the benchmark, high is 180%. Manual keeps what you type."));
 
-      var rateField = D.tariffById(state.ctx.tariff);
-      var rateLabel = "General usage";
-      if (rateField) {
-        var named = rateField.fields.filter(function (item) { return item.key === primaryRateKey(); })[0];
-        if (named) rateLabel = named.label;
+      rateFields().forEach(function (field) {
+        host.append(el("label", { for: "rate-" + field.key }, field.label));
+        var input = el("input", { id: "rate-" + field.key, inputmode: "decimal", autocomplete: "off" });
+        input.value = state.a.rates[field.key] != null ? String(state.a.rates[field.key]) : "";
+        input.addEventListener("input", function () {
+          var next = C.enterRate(state, "a", field.key, input.value);
+          if (next === state) return;
+          commit(next);
+        });
+        host.append(input);
+        var unit = field.per === "kw-month" ? "$/kW/month" : field.per === "day" ? "c/day" : field.unit || "c";
+        host.append(el("p", { class: "note" }, unit + ". Edit this to match the bill."));
+      });
+      if (showDemand) {
+        host.append(el("label", { for: "demand-kw" }, "Demand kW"));
+        var kwInput = el("input", { id: "demand-kw", inputmode: "decimal", autocomplete: "off" });
+        kwInput.value = state.usage.demandKw != null ? String(state.usage.demandKw) : "15";
+        kwInput.addEventListener("input", function () {
+          usageTouched = true;
+          commit(C.setUsage(state, "demandKw", kwInput.value));
+        });
+        host.append(kwInput);
       }
-      host.append(el("label", { for: "rate-usage" }, rateLabel));
-      var usageRate = el("input", { id: "rate-usage", inputmode: "decimal", autocomplete: "off" });
-      usageRate.value = state.a.rates[primaryRateKey()] != null ? String(state.a.rates[primaryRateKey()]) : "";
-      usageRate.addEventListener("input", function () {
-        var next = C.enterRate(state, "a", primaryRateKey(), usageRate.value);
-        if (next === state) return;
-        commit(next);
-      });
-      host.append(usageRate);
-
-      host.append(el("label", { for: "rate-supply" }, "Daily charge"));
-      var supplyRate = el("input", { id: "rate-supply", inputmode: "decimal", autocomplete: "off" });
-      supplyRate.value = state.a.rates.supply != null ? String(state.a.rates.supply) : "";
-      supplyRate.addEventListener("input", function () {
-        var next = C.enterRate(state, "a", "supply", supplyRate.value);
-        if (next === state) return;
-        commit(next);
-      });
-      host.append(supplyRate);
-      host.append(el("p", { class: "note" }, "Cents, filled when you choose the plan. Edit them to match the bill."));
     }
 
     host.append(el("label", {}, "GST"));
@@ -829,6 +918,9 @@
       if (!cost.complete) return;
       if (!best || cost.normalised < best.cost.normalised) best = { retailer: retailer, bundle: bundle, side: side, cost: cost };
     });
+    if (!best) return null;
+    best.side = withDemand(best.side, retailer);
+    best.cost = addDemandCost(best.side, best.cost);
     return best;
   }
 
@@ -924,6 +1016,16 @@
         compareExtra = id || "";
         save();
         paint();
+      },
+      showDemand: showDemand,
+      onDemand: function (on) {
+        showDemand = !!on;
+        if (showDemand && C.num(state.usage.demandKw) == null) state = C.setUsage(state, "demandKw", "15");
+        if (showDemand && C.num(state.a.rates.demand) == null) {
+          var network = D.networkById(state.ctx.network);
+          if (network && network.demand != null) state = C.enterRate(state, "a", "demand", String(network.demand));
+        }
+        commit(state);
       }
     });
   }
@@ -963,15 +1065,10 @@
     var table = el("table", { class: "rank" });
     var head = el("thead");
     var hr = el("tr");
-    var headline = "General Usage";
-    var tariffNow = D.tariffById(state.ctx.tariff);
-    if (tariffNow) {
-      var headlineField = tariffNow.fields.filter(function (item) { return item.key === primaryRateKey(); })[0];
-      if (headlineField) headline = headlineField.label;
-    }
-    ["Retailer", headline, "Daily Charge^", "Comparison Price *"].forEach(function (label) {
-      hr.append(el("th", {}, label));
-    });
+    var fields = rateFields();
+    hr.append(el("th", {}, "Retailer"));
+    fields.forEach(function (field) { hr.append(el("th", {}, field.label)); });
+    hr.append(el("th", {}, "Comparison Price *"));
     var sortTh = el("th", { class: "sortable" }, "Cost / Year Estimate " + (sortAsc ? "▲" : "▼"));
     sortTh.addEventListener("click", function () {
       sortAsc = !sortAsc;
@@ -984,25 +1081,22 @@
     table.append(head);
 
     var body = el("tbody");
-    var custUsage = inclusiveCents(state.a, primaryRateKey());
-    var custSupply = inclusiveCents(state.a, "supply");
     built.rows.forEach(function (row) {
       var mark = D.tableMark(row.retailer.id);
       var tr = el("tr", { class: row.retailer.id === state.a.retailerId ? "is-current" : "" });
       var name = el("td", { class: "name" + (mark === "sell" ? " ink-sell" : mark === "ours" || mark === "both" ? " ink-ours" : "") }, row.retailer.name);
-      var usageInc = inclusiveCents(row.side, primaryRateKey());
-      var supplyInc = inclusiveCents(row.side, "supply");
-      var usageTd = el("td", { class: inkForRate(mark, usageInc, mine ? custUsage : null, true) }, displayCents(usageInc));
-      var supplyTd = el("td", { class: inkForRate(mark, supplyInc, mine ? custSupply : null, true) }, displayCents(supplyInc));
-      if (mine && custUsage && usageInc != null && custUsage !== 0) {
-        var usagePct = Math.round((custUsage - usageInc) / Math.abs(custUsage) * 100);
-        usageTd.title = (usagePct > 0 ? usagePct + "% lower" : Math.abs(usagePct) + "% higher") + " than the customer usage rate";
-      }
-      if (mine && custSupply && supplyInc != null && custSupply !== 0) {
-        var supplyPct = Math.round((custSupply - supplyInc) / Math.abs(custSupply) * 100);
-        supplyTd.title = (supplyPct > 0 ? supplyPct + "% lower" : Math.abs(supplyPct) + "% higher") + " than the customer daily charge";
-      }
-      tr.append(name, usageTd, supplyTd);
+      tr.append(name);
+      fields.forEach(function (field) {
+        var retailerInc = inclusiveCents(row.side, field.key);
+        var customerInc = mine ? inclusiveCents(state.a, field.key) : null;
+        var lowerIsBetter = field.kind !== "higher";
+        var cell = el("td", { class: inkForRate(mark, retailerInc, customerInc, lowerIsBetter) }, displayField(field, retailerInc));
+        if (mine && customerInc && retailerInc != null && customerInc !== 0) {
+          var pct = Math.round((customerInc - retailerInc) / Math.abs(customerInc) * 100);
+          cell.title = (lowerIsBetter ? (pct > 0 ? pct + "% lower" : Math.abs(pct) + "% higher") : (pct < 0 ? Math.abs(pct) + "% higher credit" : pct + "% lower credit")) + " than the customer";
+        }
+        tr.append(cell);
+      });
       tr.append(el("td", {}, comparisonText(row.cost, built.refCost)));
       tr.append(el("td", {}, displayMoney(row.cost.normalised)));
       var linkTd = el("td");

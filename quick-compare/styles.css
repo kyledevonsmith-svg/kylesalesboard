@@ -99,6 +99,9 @@ h1 { margin: 8px 0 14px; font-size: 22px; font-weight: 700; }
 
 .recommend { margin: 0 0 8px; font-size: 14px; }
 
+.board { overflow-x: auto; }
+.demand-toggle { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-weight: 400; }
+
 .rank {
   width: 100%;
   border-collapse: collapse;
@@ -186,12 +189,22 @@ h1 { margin: 8px 0 14px; font-size: 22px; font-weight: 700; }
 .overlay[hidden] { display: none; }
 .overlay-card {
   background: #fff;
-  width: min(1080px, 100%);
+  width: min(1180px, 100%);
   margin: 0 auto;
   padding: 18px 18px 22px;
   position: relative;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
 }
+.scoreboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 8px 0 14px; }
+.score { border: 1px solid #ddd; padding: 10px 12px; background: #fff; }
+.score.is-best { border: 2px solid var(--green); background: #f3fbf4; }
+.score h2 { margin: 0 0 4px; font-size: 16px; }
+.score .year { margin: 0; font-size: 26px; font-weight: 700; line-height: 1.15; }
+.score .month { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.talk { background: #f4faf5; border: 1px solid #cfe3d2; padding: 12px 14px; margin-top: 14px; }
+.talk h2 { margin: 0 0 8px; font-size: 16px; }
+.talk ol { margin: 0; padding-left: 18px; }
+.talk li { margin: 6px 0; }
 .overlay-close {
   position: absolute;
   top: 10px;

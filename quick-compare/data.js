@@ -1090,18 +1090,30 @@
     if (!ctx) return [];
     return tariffsFor(ctx.customer, ctx.fuel).filter(function (tariff) {
       if (ctx.fuel === "gas") return !!(REGIONS[ctx.region] && REGIONS[ctx.region].gas);
-      return networkOffer(networkById(ctx.network), tariff.id, ctx.customer);
+      return !!networkById(ctx.network);
     });
+  }
+
+  function demandRate(retailer, ctx) {
+    var network = networkById(ctx && ctx.network);
+    if (!network || network.demand == null) return null;
+    var usageFactor = retailer && retailer.factor && retailer.factor.usage ? retailer.factor.usage : 1;
+    return r3(network.demand * usageFactor);
   }
 
   function offerExists(retailer, ctx) {
     if (!retailer || !ctx || !serves(retailer, ctx)) return false;
     if (ctx.fuel === "gas") return !!(REGIONS[ctx.region] && REGIONS[ctx.region].gas);
-    if (!networkOffer(networkById(ctx.network), ctx.tariff, ctx.customer)) return false;
+    if (!networkById(ctx.network)) return false;
     if (retailer.publishedDirect) {
-      return PLAN_PATTERNS.some(function (pattern) {
+      var named = PLAN_PATTERNS.some(function (pattern) {
         return pattern.retailerId === retailer.id && pattern.tariffs && pattern.tariffs.indexOf(ctx.tariff) !== -1;
       });
+      if (named) return true;
+      var family = familyFor(ctx.tariff, ctx.customer);
+      if (family === "flat" || family === "businessFlat") return networkOffer(networkById(ctx.network), ctx.tariff, ctx.customer);
+      var structure = networkById(ctx.network).structures && networkById(ctx.network).structures[family];
+      return !!(structure && structure.quality === "published-tariff");
     }
     return true;
   }
@@ -1152,6 +1164,7 @@
     networkOffer: networkOffer,
     tariffsAvailable: tariffsAvailable,
     offerExists: offerExists,
+    demandRate: demandRate,
     FIT_SCALE: FIT_SCALE
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);
