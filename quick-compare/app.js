@@ -301,7 +301,11 @@
         var bundle = QCPublic.toBundle(plan, retailer);
         var side = C.sideFromBundle(bundle, "plan-doc");
         var cost = C.annualCost(state.ctx.tariff, side, usage.resolved);
-        if (!cost.complete) return;
+        if (!cost.complete) {
+          if (!plan.windows && !Object.keys(plan.rates || {}).length) return;
+          rows.push({ retailer: retailer, bundle: bundle, side: side, cost: cost, plan: plan, partial: true });
+          return;
+        }
         var rowUsage = inclusiveCents(side, primaryRateKey());
         var rowSupply = inclusiveCents(side, "supply");
         if (!isCustomer && custUsage != null && custSupply != null && rowUsage != null && rowSupply != null && rowUsage > custUsage && rowSupply > custSupply) {
@@ -1175,9 +1179,12 @@
       if (current) badges.append(el("span", { class: "badge badge-current" }, "Current"));
       identity.append(badges);
       var figures = el("div", { class: "card-money" });
-      if (row.publicMissing || !row.cost || !row.cost.complete) {
+      if (row.publicMissing) {
         figures.append(el("p", { class: "card-year" }, "No published rate"));
         figures.append(el("p", { class: "card-ref" }, "Nothing on this retailer's public price page matches this tariff."));
+      } else if (!row.cost || !row.cost.complete) {
+        figures.append(el("p", { class: "card-year" }, "Year figure not shown"));
+        figures.append(el("p", { class: "card-ref" }, "More than one rate applies to a band. Each figure is listed on the card."));
       } else if (row.plan && /free usage/i.test(row.plan.windows || "")) {
         figures.append(el("p", { class: "card-year" }, displayMoney(row.cost.normalised) + " / year"));
         figures.append(el("p", { class: "card-ref" }, "Year figure leaves out the free usage window on this offer."));

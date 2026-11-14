@@ -429,7 +429,7 @@
     R({ id: "kogan", name: "Kogan Energy", aliases: ["Kogan"], electricity: NEM_ACT.slice(), gas: NEM.slice(), businessElectricity: [], businessGas: [], quoteUrl: "https://www.koganenergy.com.au/", factor: [0.89, 0.97, 4.2] }),
     R({ id: "nectr", name: "nectr", aliases: ["Nectr"], electricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://www.nectr.com.au/", factor: [0.87, 0.94, 3.6] }),
     R({ id: "covau", name: "CovaU", aliases: ["Covau"], electricity: NEM_ACT.concat(["TAS"]), gas: NEM_ACT.slice(), quoteUrl: "https://www.covau.com.au/", factor: [0.91, 0.97, 4.6] }),
-    R({ id: "bluenrg", name: "Blue NRG", aliases: ["BlueNRG"], electricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://www.bluenrg.com.au/", factor: [0.86, 0.94, 0], note: "Stronger in business electricity than in household plans." }),
+    R({ id: "bluenrg", name: "Blue NRG", aliases: ["BlueNRG"], electricity: [], businessElectricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://www.bluenrg.com.au/", factor: [0.86, 0.94, 0], note: "Business electricity. Not listed for residential." }),
     R({ id: "flow", name: "Flow Power", aliases: ["Flow"], electricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://flowpower.com.au/", factor: [0.88, 0.96, 5] }),
     R({ id: "reamped", name: "ReAmped Energy", aliases: ["ReAmped", "Reamped"], electricity: NEM.slice(), gas: [], quoteUrl: "https://www.reampedenergy.com.au/", factor: [0.91, 0.97, 4.8] }),
     R({ id: "discover", name: "Discover Energy", aliases: ["Discover"], electricity: NEM.slice(), gas: [], quoteUrl: "https://www.discoverenergy.com.au/", factor: [0.92, 0.98, 5] }),
