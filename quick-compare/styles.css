@@ -12,6 +12,7 @@
   --worse: #9f2d2d;
   --worse-soft: #f8ecec;
   --shadow: 0 18px 40px rgba(28, 25, 23, 0.08);
+  --on-brass: #fff;
   --mono: "JetBrains Mono", ui-monospace, monospace;
   --sans: Inter, "Segoe UI", sans-serif;
 }
@@ -178,13 +179,15 @@ h1 { margin: 0; font-size: 34px; font-weight: 560; letter-spacing: -0.035em; lin
 }
 
 .retailer-card.is-ours {
-  background: linear-gradient(180deg, #fffaf3 0%, var(--card) 42%);
-  border-color: #e6d3b4;
-  box-shadow: inset 3px 0 0 var(--brass);
+  background: var(--brass-soft);
+  border: 2px solid var(--brass);
+  box-shadow: inset 8px 0 0 var(--brass);
 }
+.retailer-card.is-ours h2 { color: var(--brass); font-size: 22px; }
+.retailer-card:not(.is-ours):not(.is-current) { background: transparent; }
 
-.retailer-card.is-current { box-shadow: inset 3px 0 0 var(--ink); }
-.retailer-card.is-ours.is-current { box-shadow: inset 3px 0 0 var(--brass); }
+.retailer-card.is-current { box-shadow: inset 8px 0 0 var(--ink); }
+.retailer-card.is-ours.is-current { box-shadow: inset 8px 0 0 var(--brass); }
 
 .card-top {
   display: grid;
@@ -203,9 +206,9 @@ h1 { margin: 0; font-size: 34px; font-weight: 560; letter-spacing: -0.035em; lin
   padding: 2px 8px;
   font-weight: 600;
 }
-.badge-ours { background: var(--brass-soft); color: var(--brass); }
+.badge-ours { background: var(--brass); color: var(--on-brass); font-size: 12px; padding: 4px 10px; }
 .badge-sell { background: var(--green-soft); color: var(--green); }
-.badge-current { background: #efece7; color: var(--ink); }
+.badge-current { background: var(--line); color: var(--ink); }
 
 .card-money { text-align: right; }
 .card-year { margin: 0; font-family: var(--mono); font-size: 18px; font-weight: 560; letter-spacing: -0.03em; }
@@ -332,6 +335,117 @@ h1 { margin: 0; font-size: 34px; font-weight: 560; letter-spacing: -0.035em; lin
 .back { margin-bottom: 10px; border: 0; background: transparent; color: var(--brass); cursor: pointer; padding: 0; }
 .benefit { margin: 0 0 4px; }
 .fine { color: var(--muted); font-size: 12px; margin: 22px 0 0; max-width: 78ch; }
+
+html[data-theme="daylight"] {
+  --ink: #101114;
+  --muted: #5e6570;
+  --line: #d9dee6;
+  --paper: #f3f5f8;
+  --card: #ffffff;
+  --brass: #c2410c;
+  --brass-soft: #ffedd5;
+  --green: #047857;
+  --green-soft: #ecfdf5;
+  --worse: #b91c1c;
+  --worse-soft: #fef2f2;
+  --on-brass: #fff;
+  --shadow: 0 12px 30px rgba(16, 17, 20, 0.06);
+}
+html[data-theme="daylight"] body { background: var(--paper); }
+
+html[data-theme="night"] {
+  color-scheme: dark;
+  --ink: #f6f1e8;
+  --muted: #b7aea3;
+  --line: #3c342c;
+  --paper: #12100e;
+  --card: #1e1a16;
+  --brass: #e4b15c;
+  --brass-soft: #3a2c18;
+  --green: #8fd0b0;
+  --green-soft: #16352c;
+  --worse: #f0a8a4;
+  --worse-soft: #3a2220;
+  --on-brass: #1c1408;
+  --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+html[data-theme="night"] body { background: var(--paper); }
+html[data-theme="night"] .customer input,
+html[data-theme="night"] .customer select,
+html[data-theme="night"] .customer textarea,
+html[data-theme="night"] .subtitle select,
+html[data-theme="night"] .bill-box input,
+html[data-theme="night"] .bill-box select,
+html[data-theme="night"] .levels button,
+html[data-theme="night"] .states button,
+html[data-theme="night"] .change-state { background: #16130f; border-color: var(--line); }
+html[data-theme="night"] .rate-cell,
+html[data-theme="night"] .retailer-card.is-ours .rate-cell { background: #2a241c; }
+html[data-theme="night"] .fuel-row { background: #1a1714; }
+html[data-theme="night"] .states button.is-on,
+html[data-theme="night"] .fuels button.is-on,
+html[data-theme="night"] .levels button.is-on,
+html[data-theme="night"] .view.is-ours { color: #1c1408; }
+
+html[data-layout="compact"] .retailer-card { gap: 8px; padding: 10px 12px; }
+html[data-layout="compact"] .card-top h2,
+html[data-layout="compact"] .retailer-card.is-ours h2 { font-size: 16px; }
+html[data-layout="compact"] .card-year { font-size: 16px; }
+html[data-layout="compact"] .rate-grid { display: flex; flex-wrap: wrap; }
+html[data-layout="compact"] .rate-cell { flex: 1 1 108px; }
+
+html[data-layout="focus"] .card-year { font-size: 26px; }
+html[data-layout="focus"] .retailer-card.is-ours { padding: 18px 18px 16px; }
+
+.settings-button {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 25;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.settings-panel {
+  position: fixed;
+  right: 22px;
+  bottom: 80px;
+  z-index: 25;
+  width: min(320px, calc(100% - 32px));
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+.settings-panel[hidden] { display: none; }
+.settings-kicker {
+  margin: 0 0 12px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--brass);
+  font-weight: 600;
+}
+.settings-label { margin: 12px 0 6px; font-size: 13px; font-weight: 600; }
+.settings-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.settings-choices button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.settings-choices button.is-on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
 @media (max-width: 860px) {
   .home-head, .split, .card-top { grid-template-columns: 1fr; }

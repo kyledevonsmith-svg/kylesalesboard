@@ -23,6 +23,30 @@
   var compareExtra = pack.compareExtra || "";
   var showDemand = !!pack.showDemand;
   var stateLocked = !!pack.stateLocked;
+  var appearance = loadAppearance();
+
+  function loadAppearance() {
+    var fresh = { theme: "warm", layout: "cards" };
+    try {
+      var saved = JSON.parse(localStorage.getItem("qc-appearance-v1") || "null");
+      if (!saved) return fresh;
+      if (saved.theme === "daylight" || saved.theme === "night" || saved.theme === "warm") fresh.theme = saved.theme;
+      if (saved.layout === "compact" || saved.layout === "focus" || saved.layout === "cards") fresh.layout = saved.layout;
+    } catch (err) { /* private mode */ }
+    return fresh;
+  }
+
+  function applyAppearance() {
+    document.documentElement.setAttribute("data-theme", appearance.theme);
+    document.documentElement.setAttribute("data-layout", appearance.layout);
+  }
+
+  function saveAppearance() {
+    try { localStorage.setItem("qc-appearance-v1", JSON.stringify(appearance)); } catch (err) { /* private mode */ }
+    applyAppearance();
+  }
+
+  applyAppearance();
 
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -613,6 +637,10 @@
 
   function paintSubtitle() {
     var host = document.getElementById("subtitle");
+    if (!stateLocked) {
+      host.replaceChildren();
+      return;
+    }
     var region = D.REGIONS[state.ctx.region];
     var place = region ? region.name : state.ctx.region;
     host.replaceChildren();
@@ -661,6 +689,11 @@
     host.replaceChildren();
     host.append(el("h2", {}, "Customer"));
 
+    if (!stateLocked) {
+      host.append(el("p", { class: "note" }, "Pick the state, or type a postcode in the notes. Retailers and rates stay hidden until the state is known."));
+    }
+
+    if (stateLocked) {
     host.append(el("label", { for: "retailer-select" }, "Retailer"));
     var retailerSelect = el("select", { id: "retailer-select" });
     retailerSelect.append(el("option", { value: "" }, "Choose a retailer"));
@@ -678,10 +711,10 @@
     });
     host.append(retailerSelect);
 
+    if (state.a.retailerId) {
     host.append(el("label", { for: "plan-select" }, "Plan"));
     var planSelect = el("select", { id: "plan-select" });
-    planSelect.disabled = !state.a.retailerId;
-    planSelect.append(el("option", { value: "" }, state.a.retailerId ? "Choose a plan" : "Choose a retailer first"));
+    planSelect.append(el("option", { value: "" }, "Choose a plan"));
     var retailer = D.retailerById(state.a.retailerId);
     if (retailer) {
       D.planChoices(retailer, state.ctx.tariff).forEach(function (choice) {
@@ -699,6 +732,8 @@
       setPlan(planSelect.value);
     });
     host.append(planSelect);
+    }
+    }
 
     host.append(el("label", { for: "notes" }, "Notes"));
     var notesInput = el("textarea", {
@@ -732,7 +767,7 @@
     });
     host.append(notesInput);
     var tenure = C.readTenure(notes, new Date());
-    host.append(el("p", { class: "note", id: "tenure-read" }, tenure ? tenure.summary : "A time here is a soft match. Within 6 months uses the best plan. A year or more uses the standing offer, equal to the reference price. Residential rates are reviewed on 1 July."));
+    if (tenure) host.append(el("p", { class: "note", id: "tenure-read" }, tenure.summary));
     var factLine = C.readNoteFacts(notes, new Date());
     if (factLine.applied.length) host.append(el("p", { class: "note", id: "facts-read" }, factLine.applied.join(" ")));
 
@@ -748,6 +783,7 @@
     });
     host.append(postcode);
 
+    if (stateLocked) {
     host.append(el("label", { for: "tariff-select" }, "Tariff"));
     var tariffSelect = el("select", { id: "tariff-select" });
     var available = D.tariffsAvailable(state.ctx);
@@ -770,7 +806,8 @@
       commit(applyTenure(next));
     });
     host.append(tariffSelect);
-    if (state.ctx.fuel === "electricity") {
+    var demandRelevant = state.ctx.fuel === "electricity" && (showDemand || /tou|demand|biz-/.test(state.ctx.tariff || ""));
+    if (demandRelevant) {
       var demandLabel = el("label", { class: "demand-toggle", for: "demand-toggle" });
       var demandBox = el("input", { type: "checkbox", id: "demand-toggle" });
       demandBox.checked = showDemand;
@@ -788,10 +825,11 @@
       demandLabel.append(demandBox, document.createTextNode(" Include demand"));
       host.append(demandLabel);
     }
+    }
     paintConfirms(host);
     if (noteHint) host.append(el("p", { class: "note" }, noteHint));
 
-    if (showRates) {
+    if (stateLocked && showRates) {
       host.append(el("label", {}, "Usage"));
       var levels = el("div", { class: "levels" });
       [["low", "Low"], ["medium", "Medium"], ["high", "High"], ["manual", "Manual"]].forEach(function (pair) {
@@ -819,7 +857,6 @@
         commit(next);
       });
       host.append(usageInput);
-      host.append(el("p", { class: "note" }, usageUnit() + ". Low is 55% of the benchmark, medium is the benchmark, high is 180%. Manual keeps what you type."));
 
       rateFields().forEach(function (field) {
         host.append(el("label", { for: "rate-" + field.key }, field.label));
@@ -831,8 +868,6 @@
           commit(next);
         });
         host.append(input);
-        var unit = field.per === "kw-month" ? "$/kW/month" : field.per === "day" ? "c/day" : field.unit || "c";
-        host.append(el("p", { class: "note" }, unit + ". Edit this to match the bill."));
       });
       if (showDemand) {
         host.append(el("label", { for: "demand-kw" }, "Demand kW"));
@@ -844,7 +879,6 @@
         });
         host.append(kwInput);
       }
-    }
 
     host.append(el("label", {}, "GST"));
     var gst = el("div", { class: "gst" });
@@ -860,6 +894,7 @@
     excLabel.append(exc, document.createTextNode(" Excluding GST"));
     gst.append(incLabel, excLabel);
     host.append(gst);
+    }
 
     if (focusId) {
       var again = document.getElementById(focusId);
@@ -1096,15 +1131,21 @@
     toolbar.append(sortBtn);
     board.append(toolbar);
 
-    var oursRows = built.rows.filter(function (row) {
+    var currentOnly = null;
+    var oursOnly = [];
+    var otherRows = [];
+    built.rows.forEach(function (row) {
       var mark = D.tableMark(row.retailer.id);
-      return mark === "ours" || mark === "both" || row.retailer.id === state.a.retailerId;
+      var ours = mark === "ours" || mark === "both";
+      if (ours) oursOnly.push(row);
+      else if (row.retailer.id === state.a.retailerId) currentOnly = row;
+      else otherRows.push(row);
     });
-    var otherRows = built.rows.filter(function (row) { return oursRows.indexOf(row) === -1; });
     var list = el("div", { class: "retailer-list" });
-    if (oursRows.length && otherRows.length) list.append(el("h3", { class: "list-label" }, "Our retailers"));
-    oursRows.forEach(function (row) { paintCard(row); });
-    if (otherRows.length) {
+    if (currentOnly) paintCard(currentOnly);
+    if (oursOnly.length) list.append(el("h3", { class: "list-label" }, "Our retailers"));
+    oursOnly.forEach(function (row) { paintCard(row); });
+    if (otherRows.length && appearance.layout !== "focus") {
       var rest = el("details", { class: "other-retailers" });
       rest.append(el("summary", {}, "Other retailers (" + otherRows.length + ")"));
       var restList = el("div", { class: "retailer-list" });
@@ -1123,7 +1164,7 @@
       var identity = el("div");
       identity.append(el("h2", { class: ours ? "ink-ours" : "" }, row.retailer.name));
       var badges = el("div", { class: "badges" });
-      if (ours) badges.append(el("span", { class: "badge badge-ours" }, "Ours"));
+      if (ours) badges.append(el("span", { class: "badge badge-ours" }, "Our retailer"));
       if (mark === "sell" || mark === "both") badges.append(el("span", { class: "badge badge-sell" }, "Selling"));
       if (current) badges.append(el("span", { class: "badge badge-current" }, "Current"));
       identity.append(badges);
@@ -1157,12 +1198,6 @@
       card.append(top, grid);
       if (!quiet) list.append(card);
       return card;
-    }
-    if (built.narrowed && built.rows.length) {
-      var onlyCustomer = built.rows.length === 1 && built.rows[0].retailer.id === state.a.retailerId && built.hiddenWorse;
-      board.append(el("p", { class: "note" }, onlyCustomer
-        ? "Our retailers are dearer on both the usage rate and the daily charge, so the list keeps only the customer's retailer."
-        : "The customer's retailer stays on the list with our retailers that still compete. Everyone else is hidden."));
     }
     if (!built.rows.length) {
       var empty = "No reference plan matches this state.";
@@ -1229,6 +1264,7 @@
   function paintBoard() {
     var board = document.getElementById("board");
     board.replaceChildren();
+    if (!stateLocked) return;
     var retailer = openId ? D.retailerById(openId) : null;
     if (retailer && D.serves(retailer, state.ctx)) paintPlans(board, retailer);
     else {
@@ -1238,16 +1274,14 @@
   }
 
   function paintFine() {
+    var host = document.getElementById("fine");
+    if (!stateLocked) {
+      host.textContent = "";
+      return;
+    }
     var built = homeRows();
     var usage = built.usage.resolved[usageKey()];
-    var host = document.getElementById("fine");
-    var bits = [];
-    bits.push("Ranked on " + (usage != null ? Number(usage).toLocaleString("en-AU") : "the") + " " + usageUnit() + (usageTouched ? " from Customer." : " until Usage is edited."));
-    bits.push("Comparison Price is against the " + refWord() + " for this network, including supply.");
-    bits.push("^ Daily charge is cents per day.");
-    bits.push("Green figures are lower than the customer. Orange names are our retailers: Dodo, Blue NRG, 1st Energy, Next Business Energy, Momentum, Alinta, ENGIE and AGL. Once a retailer is chosen, the list keeps that retailer and our retailers that still compete. A retailer is also hidden when this zone has no plan of the selected type, or when both the usage rate and the daily charge are higher.");
-    bits.push(D.DISCLAIMER);
-    host.textContent = bits.join(" ");
+    host.textContent = "Ranked on " + (usage != null ? Number(usage).toLocaleString("en-AU") : "the") + " " + usageUnit() + ". " + D.DISCLAIMER;
   }
 
   function paint() {
@@ -1260,9 +1294,55 @@
     paintOverlay();
   }
 
+  function paintSettings() {
+    var button = document.getElementById("settings-button");
+    var panel = document.getElementById("settings-panel");
+    if (!button || !panel) return;
+    var themes = [["warm", "Warm"], ["daylight", "Daylight"], ["night", "Night"]];
+    var layouts = [["cards", "Cards"], ["compact", "Compact"], ["focus", "Ours only"]];
+    function fill(host, options, key) {
+      host.replaceChildren();
+      options.forEach(function (pair) {
+        var choice = el("button", { type: "button", class: appearance[key] === pair[0] ? "is-on" : "", "aria-pressed": appearance[key] === pair[0] ? "true" : "false" }, pair[1]);
+        choice.addEventListener("click", function (event) {
+          event.stopPropagation();
+          appearance[key] = pair[0];
+          saveAppearance();
+          fill(host, options, key);
+          paint();
+        });
+        host.append(choice);
+      });
+    }
+    fill(document.getElementById("theme-choices"), themes, "theme");
+    fill(document.getElementById("layout-choices"), layouts, "layout");
+    button.addEventListener("click", function () {
+      var open = panel.hasAttribute("hidden");
+      if (open) panel.removeAttribute("hidden");
+      else panel.setAttribute("hidden", "");
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    document.addEventListener("click", function (event) {
+      if (panel.hasAttribute("hidden")) return;
+      if (panel.contains(event.target) || button.contains(event.target)) return;
+      panel.setAttribute("hidden", "");
+      button.setAttribute("aria-expanded", "false");
+    });
+  }
+
   document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape" && compareWith) closeCompare();
+    if (event.key !== "Escape") return;
+    var panel = document.getElementById("settings-panel");
+    if (panel && !panel.hasAttribute("hidden")) {
+      panel.setAttribute("hidden", "");
+      var button = document.getElementById("settings-button");
+      if (button) button.setAttribute("aria-expanded", "false");
+      return;
+    }
+    if (compareWith) closeCompare();
   });
+
+  paintSettings();
 
   if (!state.usage[usageKey()] && !usageTouched) {
     state = fillUsage(state);

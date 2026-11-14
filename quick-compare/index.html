@@ -24,6 +24,18 @@
     <p class="fine" id="fine"></p>
   </div>
   <div class="overlay" id="overlay" hidden></div>
+  <button type="button" class="settings-button" id="settings-button" aria-label="Theme and layout" aria-expanded="false">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path fill="currentColor" d="M19.4 13.5a7.7 7.7 0 0 0 .1-1.5 7.7 7.7 0 0 0-.1-1.5l2-1.6a.5.5 0 0 0 .1-.6l-1.9-3.3a.5.5 0 0 0-.6-.2l-2.4 1a7.4 7.4 0 0 0-2.6-1.5l-.4-2.5a.5.5 0 0 0-.5-.4h-3.8a.5.5 0 0 0-.5.4l-.4 2.5a7.4 7.4 0 0 0-2.6 1.5l-2.4-1a.5.5 0 0 0-.6.2L2.4 8.3a.5.5 0 0 0 .1.6l2 1.6a7.7 7.7 0 0 0-.1 1.5 7.7 7.7 0 0 0 .1 1.5l-2 1.6a.5.5 0 0 0-.1.6l1.9 3.3a.5.5 0 0 0 .6.2l2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5a.5.5 0 0 0 .5.4h3.8a.5.5 0 0 0 .5-.4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1a.5.5 0 0 0 .6-.2l1.9-3.3a.5.5 0 0 0-.1-.6l-2-1.6ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/>
+    </svg>
+  </button>
+  <div class="settings-panel" id="settings-panel" hidden>
+    <p class="settings-kicker">Settings</p>
+    <p class="settings-label">Theme</p>
+    <div class="settings-choices" id="theme-choices"></div>
+    <p class="settings-label">Layout</p>
+    <div class="settings-choices" id="layout-choices"></div>
+  </div>
   <script src="data.js"></script>
   <script src="calc.js"></script>
   <script src="compare.js"></script>
