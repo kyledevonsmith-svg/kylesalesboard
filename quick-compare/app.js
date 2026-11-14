@@ -987,10 +987,9 @@
     return best;
   }
 
-  function challengerSide(row, letter) {
+  function challengerSide(row) {
     var mark = D.tableMark(row.retailer.id);
     return {
-      letter: letter,
       name: row.retailer.name,
       planName: row.bundle.planName || "",
       retailerId: row.retailer.id,
@@ -1049,7 +1048,6 @@
     });
     var sides = [
       {
-        letter: "A",
         name: state.a.name || "Current plan",
         planName: state.a.planLabel || state.a.planName || "Rates as entered",
         retailerId: state.a.retailerId || "",
@@ -1057,9 +1055,9 @@
         gstInclusive: state.a.gstInclusive !== false,
         ours: false
       },
-      challengerSide(challenger, "B")
+      challengerSide(challenger)
     ];
-    if (extra) sides.push(challengerSide(extra, "C"));
+    if (extra) sides.push(challengerSide(extra));
     host.hidden = false;
     window.QCCompare.render(host, {
       ctx: state.ctx,

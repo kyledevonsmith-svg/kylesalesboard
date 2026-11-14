@@ -1,5 +1,5 @@
 "use strict";
-/* Comparison overlay. A is the customer. B is the retailer they opened. C is optional. */
+/* Comparison overlay. The first side is the customer. The next is the retailer they opened. A third retailer is optional. */
 (function (root) {
   var D = root.QCData;
   var C = root.QCCalc;
@@ -163,13 +163,14 @@
     sides.forEach(function (side, index) {
       var cost = costs[index];
       var score = el("article", { class: "score" + (bestGap && bestGap.gap > 0 && side === bestGap.side ? " is-best" : "") });
-      score.append(el("h2", { class: side.ours ? "ink-ours" : "" }, side.letter + " · " + (side.name || "Plan")));
+      score.append(el("h2", { class: side.ours ? "ink-ours" : "" }, side.name || "Plan"));
       score.append(el("p", { class: "year" }, cost && cost.complete ? money(cost.normalised) + " / year" : "Rates needed"));
       if (cost && cost.complete) score.append(el("p", { class: "month" }, money(cost.normalised / 12) + " a month"));
       if (index > 0 && costs[0] && costs[0].complete && cost && cost.complete) {
         var gap = costs[0].normalised - cost.normalised;
         var pct = costs[0].normalised ? Math.round(gap / costs[0].normalised * 100) : 0;
-        var line = gap > 0 ? "Save " + money(gap) + " · " + pct + "% under A" : gap < 0 ? money(-gap) + " more than A" : "Same as A";
+        var currentName = a && a.name ? a.name : "the current plan";
+        var line = gap > 0 ? "Save " + money(gap) + " · " + pct + "% under " + currentName : gap < 0 ? money(-gap) + " more than " + currentName : "Same as " + currentName;
         score.append(el("p", { class: gap > 0 ? "ink-better" : gap < 0 ? "ink-worse" : "month" }, line));
       }
       score.append(el("p", { class: "month" }, side.planName || ""));
@@ -237,8 +238,9 @@
     var table = el("table", { class: "rank" });
     var head = el("tr");
     head.append(el("th", {}, ""));
-    sides.forEach(function (side) { head.append(el("th", {}, side.letter + " · " + side.name)); });
-    others.forEach(function (side) { head.append(el("th", {}, side.letter + " vs A")); });
+    var currentName = a && a.name ? a.name : "Current";
+    sides.forEach(function (side) { head.append(el("th", {}, side.name || "Plan")); });
+    others.forEach(function (side) { head.append(el("th", {}, (side.name || "Plan") + " vs " + currentName)); });
     table.append(el("thead"));
     table.tHead.append(head);
     var body = el("tbody");
