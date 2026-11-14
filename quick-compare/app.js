@@ -22,6 +22,7 @@
   var compareWith = pack.compareWith || "";
   var compareExtra = pack.compareExtra || "";
   var showDemand = !!pack.showDemand;
+  var stateLocked = !!pack.stateLocked;
 
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -50,7 +51,8 @@
       noteBill: null,
       compareWith: "",
       compareExtra: "",
-      showDemand: false
+      showDemand: false,
+      stateLocked: false
     };
     try {
       var raw = sessionStorage.getItem("qc-home-v1");
@@ -75,7 +77,8 @@
         noteBill: saved.noteBill || null,
         compareWith: saved.compareWith || "",
         compareExtra: saved.compareExtra || "",
-        showDemand: !!saved.showDemand
+        showDemand: !!saved.showDemand,
+        stateLocked: !!saved.stateLocked
       };
     } catch (err) {
       return fresh;
@@ -98,7 +101,8 @@
         noteBill: noteBill,
         compareWith: compareWith,
         compareExtra: compareExtra,
-        showDemand: showDemand
+        showDemand: showDemand,
+        stateLocked: stateLocked
       }));
     } catch (err) { /* private mode */ }
   }
@@ -426,6 +430,7 @@
       current = ensureOffer(C.setContext(current, { customer: facts.customer }));
     }
     if (facts.postcode && facts.postcode.certain && facts.postcode.value !== current.ctx.postcode && !dismissed["postcode-" + facts.postcode.value]) {
+      stateLocked = true;
       current = ensureOffer(C.setContext(current, { postcode: facts.postcode.value }));
     }
     if (facts.tariffFamily && !dismissed["tariff-" + facts.tariffFamily]) {
@@ -507,6 +512,7 @@
   }
 
   function setRegion(region) {
+    stateLocked = true;
     var next = ensureOffer(C.setContext(state, { region: region }));
     if (next.a && next.a.retailerId) {
       var retailer = D.retailerById(next.a.retailerId);
@@ -576,7 +582,24 @@
 
   function paintStates() {
     var host = document.getElementById("states");
+    var title = document.querySelector("h1");
+    var region = D.REGIONS[state.ctx.region];
     host.replaceChildren();
+    if (stateLocked) {
+      if (title) title.textContent = region ? region.name : state.ctx.region;
+      host.className = "states is-locked";
+      host.append(el("span", { class: "state-lock" }, state.ctx.region));
+      var change = el("button", { type: "button", class: "change-state" }, "Change state");
+      change.addEventListener("click", function () {
+        stateLocked = false;
+        save();
+        paint();
+      });
+      host.append(change);
+      return;
+    }
+    if (title) title.textContent = "Where is the customer?";
+    host.className = "states";
     STATES.forEach(function (id) {
       var button = el("button", {
         type: "button",
@@ -594,16 +617,16 @@
     var place = region ? region.name : state.ctx.region;
     host.replaceChildren();
     if (state.ctx.fuel === "gas") {
-      host.textContent = "Cheapest gas by retailer — " + place;
+      host.textContent = "Gas";
       return;
     }
     var nets = D.networksFor(state.ctx.region);
     var network = D.networkById(state.ctx.network);
     if (nets.length < 2) {
-      host.textContent = "Cheapest electricity by retailer — " + place + (network ? ", " + network.name : "");
+      host.textContent = network ? network.name : place;
       return;
     }
-    host.append(document.createTextNode("Cheapest electricity by retailer — " + place + ", "));
+    host.append(document.createTextNode("Distributor "));
     var label = el("label", { class: "network" });
     var select = el("select", { id: "network-select", "aria-label": "Network" });
     nets.forEach(function (item) {
@@ -1062,50 +1085,79 @@
     }
     if (recommend.textContent) board.append(recommend);
 
-    var table = el("table", { class: "rank" });
-    var head = el("thead");
-    var hr = el("tr");
     var fields = rateFields();
-    hr.append(el("th", {}, "Retailer"));
-    fields.forEach(function (field) { hr.append(el("th", {}, field.label)); });
-    hr.append(el("th", {}, "Comparison Price *"));
-    var sortTh = el("th", { class: "sortable" }, "Cost / Year Estimate " + (sortAsc ? "▲" : "▼"));
-    sortTh.addEventListener("click", function () {
+    var toolbar = el("div", { class: "board-tools" });
+    var sortBtn = el("button", { type: "button", class: "change-state" }, sortAsc ? "Lowest cost first" : "Highest cost first");
+    sortBtn.addEventListener("click", function () {
       sortAsc = !sortAsc;
       save();
       paint();
     });
-    hr.append(sortTh);
-    hr.append(el("th", {}, "Compare"));
-    head.append(hr);
-    table.append(head);
+    toolbar.append(sortBtn);
+    board.append(toolbar);
 
-    var body = el("tbody");
-    built.rows.forEach(function (row) {
+    var oursRows = built.rows.filter(function (row) {
       var mark = D.tableMark(row.retailer.id);
-      var tr = el("tr", { class: row.retailer.id === state.a.retailerId ? "is-current" : "" });
-      var name = el("td", { class: "name" + (mark === "sell" ? " ink-sell" : mark === "ours" || mark === "both" ? " ink-ours" : "") }, row.retailer.name);
-      tr.append(name);
+      return mark === "ours" || mark === "both" || row.retailer.id === state.a.retailerId;
+    });
+    var otherRows = built.rows.filter(function (row) { return oursRows.indexOf(row) === -1; });
+    var list = el("div", { class: "retailer-list" });
+    if (oursRows.length && otherRows.length) list.append(el("h3", { class: "list-label" }, "Our retailers"));
+    oursRows.forEach(function (row) { paintCard(row); });
+    if (otherRows.length) {
+      var rest = el("details", { class: "other-retailers" });
+      rest.append(el("summary", {}, "Other retailers (" + otherRows.length + ")"));
+      var restList = el("div", { class: "retailer-list" });
+      otherRows.forEach(function (row) { restList.append(paintCard(row, true)); });
+      rest.append(restList);
+      list.append(rest);
+    }
+    board.append(list);
+
+    function paintCard(row, quiet) {
+      var mark = D.tableMark(row.retailer.id);
+      var ours = mark === "ours" || mark === "both";
+      var current = row.retailer.id === state.a.retailerId;
+      var card = el("article", { class: "retailer-card" + (ours ? " is-ours" : "") + (current ? " is-current" : "") + (mark === "sell" ? " is-sell" : "") });
+      var top = el("div", { class: "card-top" });
+      var identity = el("div");
+      identity.append(el("h2", { class: ours ? "ink-ours" : "" }, row.retailer.name));
+      var badges = el("div", { class: "badges" });
+      if (ours) badges.append(el("span", { class: "badge badge-ours" }, "Ours"));
+      if (mark === "sell" || mark === "both") badges.append(el("span", { class: "badge badge-sell" }, "Selling"));
+      if (current) badges.append(el("span", { class: "badge badge-current" }, "Current"));
+      identity.append(badges);
+      var figures = el("div", { class: "card-money" });
+      figures.append(el("p", { class: "card-year" }, displayMoney(row.cost.normalised) + " / year"));
+      figures.append(el("p", { class: "card-ref" }, comparisonText(row.cost, built.refCost)));
+      if (mine && row.retailer.id !== state.a.retailerId) {
+        var gap = mine.normalised - row.cost.normalised;
+        var pct = mine.normalised ? Math.round(gap / mine.normalised * 100) : 0;
+        var versus = gap > 0 ? pct + "% under current" : gap < 0 ? Math.abs(pct) + "% over current" : "Same as current";
+        figures.append(el("p", { class: gap > 0 ? "ink-better" : gap < 0 ? "ink-worse" : "card-ref" }, versus));
+      }
+      top.append(identity, figures, viewButton(row));
+      var grid = el("div", { class: "rate-grid" });
       fields.forEach(function (field) {
         var retailerInc = inclusiveCents(row.side, field.key);
         var customerInc = mine ? inclusiveCents(state.a, field.key) : null;
         var lowerIsBetter = field.kind !== "higher";
-        var cell = el("td", { class: inkForRate(mark, retailerInc, customerInc, lowerIsBetter) }, displayField(field, retailerInc));
+        var cell = el("div", { class: "rate-cell" });
+        cell.append(el("span", {}, field.label));
+        cell.append(el("strong", { class: inkForRate(mark, retailerInc, customerInc, lowerIsBetter) }, displayField(field, retailerInc)));
         if (mine && customerInc && retailerInc != null && customerInc !== 0) {
-          var pct = Math.round((customerInc - retailerInc) / Math.abs(customerInc) * 100);
-          cell.title = (lowerIsBetter ? (pct > 0 ? pct + "% lower" : Math.abs(pct) + "% higher") : (pct < 0 ? Math.abs(pct) + "% higher credit" : pct + "% lower credit")) + " than the customer";
+          var ratePct = Math.round((customerInc - retailerInc) / Math.abs(customerInc) * 100);
+          var rateWord = lowerIsBetter
+            ? (ratePct > 0 ? ratePct + "% lower" : Math.abs(ratePct) + "% higher")
+            : (ratePct < 0 ? Math.abs(ratePct) + "% higher credit" : ratePct + "% lower credit");
+          cell.append(el("em", { class: inkForRate(mark, retailerInc, customerInc, lowerIsBetter) }, rateWord));
         }
-        tr.append(cell);
+        grid.append(cell);
       });
-      tr.append(el("td", {}, comparisonText(row.cost, built.refCost)));
-      tr.append(el("td", {}, displayMoney(row.cost.normalised)));
-      var linkTd = el("td");
-      linkTd.append(viewButton(row));
-      tr.append(linkTd);
-      body.append(tr);
-    });
-    table.append(body);
-    board.append(table);
+      card.append(top, grid);
+      if (!quiet) list.append(card);
+      return card;
+    }
     if (built.narrowed && built.rows.length) {
       var onlyCustomer = built.rows.length === 1 && built.rows[0].retailer.id === state.a.retailerId && built.hiddenWorse;
       board.append(el("p", { class: "note" }, onlyCustomer
