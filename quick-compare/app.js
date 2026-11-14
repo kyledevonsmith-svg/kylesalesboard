@@ -15,6 +15,10 @@
   var planPinned = !!pack.planPinned;
   var appliedBand = pack.appliedBand || "";
   var appliedRetailer = pack.appliedRetailer || "";
+  var usageLevel = pack.usageLevel || "medium";
+  var dismissed = pack.dismissed || {};
+  var noteBill = pack.noteBill || null;
+  var noteHint = "";
 
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -37,7 +41,10 @@
       notes: "",
       planPinned: false,
       appliedBand: "",
-      appliedRetailer: ""
+      appliedRetailer: "",
+      usageLevel: "medium",
+      dismissed: {},
+      noteBill: null
     };
     try {
       var raw = sessionStorage.getItem("qc-home-v1");
@@ -56,7 +63,10 @@
         notes: saved.notes || "",
         planPinned: !!saved.planPinned,
         appliedBand: saved.appliedBand || "",
-        appliedRetailer: saved.appliedRetailer || ""
+        appliedRetailer: saved.appliedRetailer || "",
+        usageLevel: saved.usageLevel || "medium",
+        dismissed: saved.dismissed || {},
+        noteBill: saved.noteBill || null
       };
     } catch (err) {
       return fresh;
@@ -73,7 +83,10 @@
         notes: notes,
         planPinned: planPinned,
         appliedBand: appliedBand,
-        appliedRetailer: appliedRetailer
+        appliedRetailer: appliedRetailer,
+        usageLevel: usageLevel,
+        dismissed: dismissed,
+        noteBill: noteBill
       }));
     } catch (err) { /* private mode */ }
   }
@@ -88,7 +101,17 @@
     return state.ctx.fuel === "gas" ? "gasUsage" : "usage";
   }
 
+  function primaryRateKey() {
+    if (state.ctx.fuel === "gas") return "gasUsage";
+    var tariff = D.tariffById(state.ctx.tariff);
+    if (!tariff) return "usage";
+    var field = tariff.fields.filter(function (item) { return item.per === "kwh" || item.per === "mj"; })[0];
+    return field ? field.key : "usage";
+  }
+
   function usageKey() {
+    var tariff = D.tariffById(state.ctx.tariff);
+    if (tariff && tariff.usage && tariff.usage[0]) return tariff.usage[0].key;
     return state.ctx.fuel === "gas" ? "gasMj" : "generalKwh";
   }
 
@@ -160,8 +183,12 @@
     var ref = referenceSide(state.ctx);
     var refCost = ref ? C.annualCost(state.ctx.tariff, ref, usage.resolved) : null;
     var rows = [];
+    var hiddenWorse = 0;
+    var offerMissing = !D.tariffsAvailable(state.ctx).some(function (tariff) { return tariff.id === state.ctx.tariff; });
+    var custUsage = inclusiveCents(state.a, primaryRateKey());
+    var custSupply = inclusiveCents(state.a, "supply");
     D.RETAILERS.forEach(function (retailer) {
-      if (!D.serves(retailer, state.ctx)) return;
+      if (!D.offerExists(retailer, state.ctx)) return;
       var best = null;
       D.rankVariants(retailer, state.ctx).forEach(function (variant) {
         var bundle = D.buildReferencePlan(retailer.id, state.ctx, variant);
@@ -173,7 +200,14 @@
           best = { retailer: retailer, bundle: bundle, side: side, cost: cost };
         }
       });
-      if (best) rows.push(best);
+      if (!best) return;
+      var rowUsage = inclusiveCents(best.side, primaryRateKey());
+      var rowSupply = inclusiveCents(best.side, "supply");
+      if (custUsage != null && custSupply != null && rowUsage != null && rowSupply != null && rowUsage > custUsage && rowSupply > custSupply) {
+        hiddenWorse += 1;
+        return;
+      }
+      rows.push(best);
     });
     rows.sort(function (a, b) {
       var diff = a.cost.normalised - b.cost.normalised;
@@ -181,7 +215,7 @@
       if (diff) return diff;
       return a.retailer.name.localeCompare(b.retailer.name);
     });
-    return { rows: rows, usage: usage, refCost: refCost && refCost.complete ? refCost : null };
+    return { rows: rows, usage: usage, refCost: refCost && refCost.complete ? refCost : null, hiddenWorse: hiddenWorse, offerMissing: offerMissing };
   }
 
   function comparisonText(cost, refCost) {
@@ -257,6 +291,50 @@
     return best;
   }
 
+  function scaleUsage(current, level) {
+    var tariff = D.tariffById(current.ctx.tariff);
+    if (!tariff) return current;
+    var factor = level === "low" ? 0.55 : level === "high" ? 1.8 : 1;
+    var usage = Object.assign({}, current.usage);
+    tariff.usage.forEach(function (field) {
+      usage[field.key] = String(Math.round(D.defaultUsage(current.ctx, field.key).value * factor));
+    });
+    return Object.assign({}, current, { usage: usage });
+  }
+
+  function finishUsage(current) {
+    if (usageLevel !== "manual") return scaleUsage(current, usageLevel);
+    return current;
+  }
+
+  function ensureOffer(current) {
+    var list = D.tariffsAvailable(current.ctx);
+    if (!list.length) return current;
+    if (list.some(function (item) { return item.id === current.ctx.tariff; })) return current;
+    return C.setContext(current, { tariff: list[0].id });
+  }
+
+  function applyFacts(current) {
+    var facts = C.readNoteFacts(notes, new Date());
+    if (facts.customer && facts.customer !== current.ctx.customer && !dismissed.customer) {
+      current = ensureOffer(C.setContext(current, { customer: facts.customer }));
+    }
+    if (facts.postcode && facts.postcode.certain && facts.postcode.value !== current.ctx.postcode && !dismissed["postcode-" + facts.postcode.value]) {
+      current = ensureOffer(C.setContext(current, { postcode: facts.postcode.value }));
+    }
+    if (facts.tariffId && facts.tariffId !== current.ctx.tariff && !dismissed["tariff-" + facts.tariffId]) {
+      var allowed = D.tariffsAvailable(current.ctx).some(function (item) { return item.id === facts.tariffId; });
+      if (allowed) current = C.setContext(current, { tariff: facts.tariffId });
+      else noteHint = "That tariff is not on file for this distribution zone, so it was left off the list.";
+    }
+    if (facts.usageLevel && facts.usageLevel !== usageLevel && !dismissed["level-" + facts.usageLevel]) {
+      usageLevel = facts.usageLevel;
+      usageTouched = false;
+    }
+    noteBill = facts.bill && facts.bill.certain ? facts.bill : noteBill;
+    return current;
+  }
+
   function applyTenure(current) {
     var read = C.readTenure(notes, new Date());
     if (!read || planPinned || !current.a || !current.a.retailerId) {
@@ -264,36 +342,57 @@
         appliedBand = "";
         appliedRetailer = "";
       }
-      return current;
+      return finishUsage(current);
     }
     var choice = choiceForBand(current, read.band);
-    if (!choice) return current;
-    if (current.a.planChoiceId === choice.id && appliedBand === read.band && appliedRetailer === current.a.retailerId) return current;
+    if (!choice) return finishUsage(current);
+    if (current.a.planChoiceId === choice.id && appliedBand === read.band && appliedRetailer === current.a.retailerId) return finishUsage(current);
     var keepInc = current.a.gstInclusive !== false;
     var next = C.selectPlan(current, choice.id);
     if (!keepInc) next = withGst(next, false);
-    if (!usageTouched) next = fillUsage(next);
+    if (usageLevel === "manual" && !usageTouched) next = fillUsage(next);
     appliedBand = read.band;
     appliedRetailer = current.a.retailerId;
-    return next;
+    return finishUsage(next);
   }
 
   function setFuel(fuel) {
-    var tariff = fuel === "gas" ? "gas-single" : "single";
-    var next = C.setContext(state, { fuel: fuel, tariff: tariff, customer: "residential" });
-    if (next.a && next.a.retailerId && !D.serves(D.retailerById(next.a.retailerId), next.ctx)) {
+    var next = ensureOffer(C.setContext(state, { fuel: fuel }));
+    if (next.a && next.a.retailerId && !D.offerExists(D.retailerById(next.a.retailerId), next.ctx)) {
       next = Object.assign({}, next, { a: C.emptySide() });
     }
-    usageTouched = false;
     openId = "";
     appliedBand = "";
-    next = fillUsage(next);
+    if (usageLevel === "manual" && !usageTouched) next = fillUsage(next);
     next = applyTenure(next);
     commit(next);
   }
 
+  function setCustomer(kind) {
+    var next = ensureOffer(C.setContext(state, { customer: kind }));
+    if (next.a && next.a.retailerId && !D.offerExists(D.retailerById(next.a.retailerId), next.ctx)) {
+      next = Object.assign({}, next, { a: C.emptySide() });
+    }
+    openId = "";
+    appliedBand = "";
+    next = applyTenure(next);
+    commit(next);
+  }
+
+  function setLevel(level) {
+    usageLevel = level;
+    usageTouched = level === "manual";
+    if (level === "manual") {
+      save();
+      paint();
+      return;
+    }
+    appliedBand = "";
+    commit(applyTenure(state));
+  }
+
   function setRegion(region) {
-    var next = C.setContext(state, { region: region });
+    var next = ensureOffer(C.setContext(state, { region: region }));
     if (next.a && next.a.retailerId) {
       var retailer = D.retailerById(next.a.retailerId);
       if (!retailer || !D.serves(retailer, next.ctx)) {
@@ -339,18 +438,25 @@
       }
     }
     if (mark === "sell" || mark === "both") return "ink-sell";
-    if (mark === "ours") return "ink-blue";
     return "";
   }
 
   function paintFuels() {
     var host = document.getElementById("fuels");
     host.replaceChildren();
+    var who = el("div", { class: "fuel-row" });
+    [["residential", "Residential"], ["business", "Business"]].forEach(function (pair) {
+      var button = el("button", { type: "button", class: state.ctx.customer === pair[0] ? "is-on" : "" }, pair[1]);
+      button.addEventListener("click", function () { setCustomer(pair[0]); });
+      who.append(button);
+    });
+    var fuel = el("div", { class: "fuel-row" });
     [["electricity", "Electricity"], ["gas", "Gas"]].forEach(function (pair) {
       var button = el("button", { type: "button", class: state.ctx.fuel === pair[0] ? "is-on" : "" }, pair[1]);
       button.addEventListener("click", function () { setFuel(pair[0]); });
-      host.append(button);
+      fuel.append(button);
     });
+    host.append(who, fuel);
   }
 
   function paintStates() {
@@ -392,7 +498,7 @@
     });
     select.addEventListener("change", function () {
       openId = "";
-      var next = C.setContext(state, { network: select.value });
+      var next = ensureOffer(C.setContext(state, { network: select.value }));
       if (next.a && next.a.retailerId && next.a.planChoiceId) {
         if (planPinned) {
           var keepInc = next.a.gstInclusive !== false;
@@ -464,28 +570,78 @@
     });
     notesInput.value = notes;
     notesInput.addEventListener("input", function () {
-      var previous = C.readTenure(notes, new Date());
+      var previous = C.readNoteFacts(notes, new Date());
       notes = notesInput.value;
-      var nextRead = C.readTenure(notes, new Date());
-      var previousBand = previous ? previous.band : "";
-      var nextBand = nextRead ? nextRead.band : "";
-      if (previousBand === nextBand) {
+      var nextRead = C.readNoteFacts(notes, new Date());
+      var previousBand = previous.tenure ? previous.tenure.band : "";
+      var nextBand = nextRead.tenure ? nextRead.tenure.band : "";
+      var sameFacts = JSON.stringify({
+        c: previous.customer, p: previous.postcode, t: previous.tariffId, u: previous.usageLevel, b: previous.bill
+      }) === JSON.stringify({
+        c: nextRead.customer, p: nextRead.postcode, t: nextRead.tariffId, u: nextRead.usageLevel, b: nextRead.bill
+      });
+      if (previousBand === nextBand && sameFacts) {
         save();
         var line = document.getElementById("tenure-read");
-        if (line && nextRead) line.textContent = nextRead.summary;
+        if (line && nextRead.tenure) line.textContent = nextRead.tenure.summary;
         return;
       }
-      planPinned = false;
-      appliedBand = "";
-      commit(applyTenure(state));
+      if (previousBand !== nextBand) {
+        planPinned = false;
+        appliedBand = "";
+      }
+      commit(applyTenure(applyFacts(state)));
     });
     host.append(notesInput);
     var tenure = C.readTenure(notes, new Date());
     host.append(el("p", { class: "note", id: "tenure-read" }, tenure ? tenure.summary : "A time here is a soft match. Within 6 months uses the best plan. A year or more uses the standing offer, equal to the reference price. Residential rates are reviewed on 1 July."));
 
-    var showRates = !!(state.a.planChoiceId || state.a.source === "manual" || C.num(state.a.rates[rateKey()]) != null);
+    var showRates = !!(state.a.planChoiceId || state.a.source === "manual" || C.num(state.a.rates[primaryRateKey()]) != null);
+    host.append(el("label", { for: "postcode" }, "Postcode"));
+    var postcode = el("input", { id: "postcode", inputmode: "numeric", maxlength: "4", autocomplete: "off" });
+    postcode.value = state.ctx.postcode || "";
+    postcode.addEventListener("change", function () {
+      var next = ensureOffer(C.setContext(state, { postcode: postcode.value }));
+      openId = "";
+      appliedBand = "";
+      commit(applyTenure(next));
+    });
+    host.append(postcode);
+
+    host.append(el("label", { for: "tariff-select" }, "Tariff"));
+    var tariffSelect = el("select", { id: "tariff-select" });
+    var available = D.tariffsAvailable(state.ctx);
+    if (!available.length) tariffSelect.append(el("option", { value: "" }, "No plan type on file for this zone"));
+    available.forEach(function (tariff) {
+      var option = el("option", { value: tariff.id }, tariff.label);
+      if (tariff.id === state.ctx.tariff) option.selected = true;
+      tariffSelect.append(option);
+    });
+    tariffSelect.addEventListener("change", function () {
+      if (!tariffSelect.value) return;
+      var next = C.setContext(state, { tariff: tariffSelect.value });
+      openId = "";
+      appliedBand = "";
+      if (next.a && next.a.retailerId && next.a.planChoiceId) {
+        var keepInc = next.a.gstInclusive !== false;
+        next = C.selectPlan(next, next.a.planChoiceId);
+        if (!keepInc) next = withGst(next, false);
+      }
+      commit(applyTenure(next));
+    });
+    host.append(tariffSelect);
+    paintConfirms(host);
+    if (noteHint) host.append(el("p", { class: "note" }, noteHint));
+
     if (showRates) {
-      host.append(el("label", { for: "usage-input" }, "Usage"));
+      host.append(el("label", {}, "Usage"));
+      var levels = el("div", { class: "levels" });
+      [["low", "Low"], ["medium", "Medium"], ["high", "High"], ["manual", "Manual"]].forEach(function (pair) {
+        var button = el("button", { type: "button", class: usageLevel === pair[0] ? "is-on" : "" }, pair[1]);
+        button.addEventListener("click", function () { setLevel(pair[0]); });
+        levels.append(button);
+      });
+      host.append(levels);
       var usageInput = el("input", {
         id: "usage-input",
         inputmode: "decimal",
@@ -494,6 +650,7 @@
       });
       usageInput.value = state.usage[usageKey()] != null ? String(state.usage[usageKey()]) : "";
       usageInput.addEventListener("input", function () {
+        usageLevel = "manual";
         usageTouched = true;
         var next = C.setUsage(state, usageKey(), usageInput.value);
         var read = C.readTenure(notes, new Date());
@@ -504,13 +661,19 @@
         commit(next);
       });
       host.append(usageInput);
-      host.append(el("p", { class: "note" }, usageUnit() + ". Filled from the plan’s benchmark until you edit it."));
+      host.append(el("p", { class: "note" }, usageUnit() + ". Low is 55% of the benchmark, medium is the benchmark, high is 180%. Manual keeps what you type."));
 
-      host.append(el("label", { for: "rate-usage" }, state.ctx.fuel === "gas" ? "Usage rate" : "General usage"));
+      var rateField = D.tariffById(state.ctx.tariff);
+      var rateLabel = "General usage";
+      if (rateField) {
+        var named = rateField.fields.filter(function (item) { return item.key === primaryRateKey(); })[0];
+        if (named) rateLabel = named.label;
+      }
+      host.append(el("label", { for: "rate-usage" }, rateLabel));
       var usageRate = el("input", { id: "rate-usage", inputmode: "decimal", autocomplete: "off" });
-      usageRate.value = state.a.rates[rateKey()] != null ? String(state.a.rates[rateKey()]) : "";
+      usageRate.value = state.a.rates[primaryRateKey()] != null ? String(state.a.rates[primaryRateKey()]) : "";
       usageRate.addEventListener("input", function () {
-        var next = C.enterRate(state, "a", rateKey(), usageRate.value);
+        var next = C.enterRate(state, "a", primaryRateKey(), usageRate.value);
         if (next === state) return;
         commit(next);
       });
@@ -555,14 +718,88 @@
     }
   }
 
+  function paintConfirms(host) {
+    var facts = C.readNoteFacts(notes, new Date());
+    facts.uncertain.forEach(function (item) {
+      if (dismissed[item.id]) return;
+      var row = el("p", { class: "confirm" });
+      row.append(document.createTextNode(item.question + " "));
+      if (item.kind === "bill") {
+        ["month", "quarter", "year"].forEach(function (period) {
+          var yes = el("button", { type: "button", class: "view" }, period);
+          yes.addEventListener("click", function () {
+            noteBill = { amount: item.amount, period: period, certain: true };
+            dismissed[item.id] = true;
+            save();
+            paint();
+          });
+          row.append(yes);
+        });
+      } else {
+        var yes = el("button", { type: "button", class: "view" }, "Use");
+        yes.addEventListener("click", function () {
+          dismissed[item.id] = true;
+          var next = state;
+          if (item.kind === "postcode") next = ensureOffer(C.setContext(state, { postcode: item.value }));
+          if (item.kind === "tariff") {
+            var allowed = D.tariffsAvailable(state.ctx).some(function (tariff) { return tariff.id === item.value; });
+            if (allowed) next = C.setContext(state, { tariff: item.value });
+            else noteHint = "That tariff is not on file for this distribution zone, so it was left off the list.";
+          }
+          commit(applyTenure(next));
+        });
+        row.append(yes);
+      }
+      var skip = el("button", { type: "button", class: "back" }, "Skip");
+      skip.addEventListener("click", function () {
+        dismissed[item.id] = true;
+        save();
+        paint();
+      });
+      row.append(skip);
+      host.append(row);
+    });
+  }
+
+  function openCompare(row) {
+    var bundle = row.bundle || {};
+    var payload = {
+      ctx: state.ctx,
+      usage: state.usage,
+      usageLevel: usageLevel,
+      notes: notes,
+      bill: noteBill,
+      a: {
+        name: state.a.name || "Current plan",
+        planName: state.a.planName || "",
+        retailerId: state.a.retailerId || "",
+        rates: state.a.rates || {},
+        gstInclusive: state.a.gstInclusive !== false
+      },
+      b: {
+        name: row.retailer.name,
+        planName: bundle.planName || "",
+        retailerId: row.retailer.id,
+        rates: row.side.rates || {},
+        gstInclusive: true,
+        contract: bundle.contract || "",
+        exitNote: bundle.exitNote || "",
+        quoteUrl: bundle.quoteUrl || "",
+        note: bundle.note || "",
+        ours: D.tableMark(row.retailer.id) === "ours" || D.tableMark(row.retailer.id) === "both"
+      }
+    };
+    try { sessionStorage.setItem("qc-compare-v1", JSON.stringify(payload)); } catch (err) { /* private mode */ }
+    window.open("compare.html", "qcCompare", "popup,width=1080,height=860");
+  }
+
   function viewButton(row) {
     var mark = D.tableMark(row.retailer.id);
-    var button = el("button", { type: "button", class: "view" + (mark === "sell" || mark === "both" ? " is-sell" : "") }, "View");
-    button.addEventListener("click", function () {
-      openId = row.retailer.id;
-      save();
-      paint();
-    });
+    var button = el("button", {
+      type: "button",
+      class: "view" + (mark === "sell" || mark === "both" ? " is-sell" : mark === "ours" ? " is-ours" : "")
+    }, "Compare");
+    button.addEventListener("click", function () { openCompare(row); });
     return button;
   }
 
@@ -591,7 +828,13 @@
     var table = el("table", { class: "rank" });
     var head = el("thead");
     var hr = el("tr");
-    ["Retailer", state.ctx.fuel === "gas" ? "Usage" : "General Usage", "Daily Charge^", "Comparison Price *"].forEach(function (label) {
+    var headline = "General Usage";
+    var tariffNow = D.tariffById(state.ctx.tariff);
+    if (tariffNow) {
+      var headlineField = tariffNow.fields.filter(function (item) { return item.key === primaryRateKey(); })[0];
+      if (headlineField) headline = headlineField.label;
+    }
+    ["Retailer", headline, "Daily Charge^", "Comparison Price *"].forEach(function (label) {
       hr.append(el("th", {}, label));
     });
     var sortTh = el("th", { class: "sortable" }, "Cost / Year Estimate " + (sortAsc ? "▲" : "▼"));
@@ -601,18 +844,18 @@
       paint();
     });
     hr.append(sortTh);
-    hr.append(el("th", {}, "Link to Plans"));
+    hr.append(el("th", {}, "Compare"));
     head.append(hr);
     table.append(head);
 
     var body = el("tbody");
-    var custUsage = inclusiveCents(state.a, rateKey());
+    var custUsage = inclusiveCents(state.a, primaryRateKey());
     var custSupply = inclusiveCents(state.a, "supply");
     built.rows.forEach(function (row) {
       var mark = D.tableMark(row.retailer.id);
       var tr = el("tr", { class: row.retailer.id === state.a.retailerId ? "is-current" : "" });
       var name = el("td", { class: "name" + (mark === "sell" ? " ink-sell" : mark === "ours" || mark === "both" ? " ink-ours" : "") }, row.retailer.name);
-      var usageInc = inclusiveCents(row.side, rateKey());
+      var usageInc = inclusiveCents(row.side, primaryRateKey());
       var supplyInc = inclusiveCents(row.side, "supply");
       var usageTd = el("td", { class: inkForRate(mark, usageInc, mine ? custUsage : null, true) }, displayCents(usageInc));
       var supplyTd = el("td", { class: inkForRate(mark, supplyInc, mine ? custSupply : null, true) }, displayCents(supplyInc));
@@ -635,9 +878,11 @@
     table.append(body);
     board.append(table);
     if (!built.rows.length) {
-      board.append(el("p", { class: "note" }, state.ctx.fuel === "gas" && state.ctx.region === "NT"
-        ? "No reference gas market is included for the Northern Territory."
-        : "No reference plan matches this state."));
+      var empty = "No reference plan matches this state.";
+      if (state.ctx.fuel === "gas" && state.ctx.region === "NT") empty = "No reference gas market is included for the Northern Territory.";
+      else if (built.offerMissing) empty = "No plan of this type is on file for this postcode or distribution zone, so those retailers are hidden.";
+      else if (built.hiddenWorse) empty = "Every retailer with this plan is dearer on both the usage rate and the daily charge, so they are hidden.";
+      board.append(el("p", { class: "note" }, empty));
     }
   }
 
@@ -713,7 +958,7 @@
     bits.push("Ranked on " + (usage != null ? Number(usage).toLocaleString("en-AU") : "the") + " " + usageUnit() + (usageTouched ? " from Customer." : " until Usage is edited."));
     bits.push("Comparison Price is against the " + refWord() + " for this network, including supply.");
     bits.push("^ Daily charge is cents per day.");
-    bits.push("Green figures are lower than the customer once a plan is chosen. A green View button is a retailer we sell today, and an orange name is ours. Both lists are empty until those names are set.");
+    bits.push("Green figures are lower than the customer. Orange names are our retailers: Dodo, Blue NRG, 1st Energy, Next Business Energy, Momentum, Alinta, ENGIE and AGL. A retailer is hidden when this zone has no plan of the selected type, or when both the usage rate and the daily charge are higher.");
     bits.push(D.DISCLAIMER);
     host.textContent = bits.join(" ");
   }

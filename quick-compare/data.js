@@ -1064,8 +1064,7 @@
   }
 
   // Orange name = ours. Green name and a green View button = selling today.
-  // Both lists stay empty until Bill Cutters names them. Do not guess from a public page.
-  var OURS = [];
+  var OURS = ["dodo", "bluenrg", "first", "nextbusiness", "momentum", "alinta", "engie", "agl"];
   var SELLING = [];
 
   function tableMark(id) {
@@ -1075,6 +1074,36 @@
     if (sell) return "sell";
     if (ours) return "ours";
     return "";
+  }
+
+  function networkOffer(network, tariffId, customer) {
+    var family = familyFor(tariffId, customer);
+    if (!family || !network) return false;
+    if (family === "flat") return !!network.flat;
+    if (family === "businessFlat") return !!network.businessFlat;
+    if (family === "controlled") return !!(network.structures && network.structures.controlled) || !!(network.cl && network.cl.cl1 != null);
+    if (tariffId === "biz-demand") return !!(network.structures && (network.structures.demand || network.structures.businessDemand));
+    return !!(network.structures && network.structures[family]);
+  }
+
+  function tariffsAvailable(ctx) {
+    if (!ctx) return [];
+    return tariffsFor(ctx.customer, ctx.fuel).filter(function (tariff) {
+      if (ctx.fuel === "gas") return !!(REGIONS[ctx.region] && REGIONS[ctx.region].gas);
+      return networkOffer(networkById(ctx.network), tariff.id, ctx.customer);
+    });
+  }
+
+  function offerExists(retailer, ctx) {
+    if (!retailer || !ctx || !serves(retailer, ctx)) return false;
+    if (ctx.fuel === "gas") return !!(REGIONS[ctx.region] && REGIONS[ctx.region].gas);
+    if (!networkOffer(networkById(ctx.network), ctx.tariff, ctx.customer)) return false;
+    if (retailer.publishedDirect) {
+      return PLAN_PATTERNS.some(function (pattern) {
+        return pattern.retailerId === retailer.id && pattern.tariffs && pattern.tariffs.indexOf(ctx.tariff) !== -1;
+      });
+    }
+    return true;
   }
 
   function searchRetailers(query) {
@@ -1120,6 +1149,9 @@
     OURS: OURS,
     SELLING: SELLING,
     tableMark: tableMark,
+    networkOffer: networkOffer,
+    tariffsAvailable: tariffsAvailable,
+    offerExists: offerExists,
     FIT_SCALE: FIT_SCALE
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

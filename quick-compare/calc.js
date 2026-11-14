@@ -1333,6 +1333,77 @@
     return date;
   }
 
+  function readNoteFacts(text, today) {
+    var raw = String(text || "");
+    var lower = raw.toLowerCase();
+    var uncertain = [];
+    var postcode = null;
+    var seen = {};
+    var match;
+    var postcodeRe = /\b(\d{4})\b/g;
+    while ((match = postcodeRe.exec(raw))) {
+      var digits = match[1];
+      if (digits >= "2016" && digits <= "2035") {
+        var around = lower.slice(Math.max(0, match.index - 12), match.index + 12);
+        if (!/post\s?code|\bpc\b/.test(around)) continue;
+      }
+      if (!D.suggestFromPostcode(digits) || seen[digits]) continue;
+      seen[digits] = true;
+      var labelled = /post\s?code|\bpc\b/i.test(raw.slice(Math.max(0, match.index - 16), match.index + 4));
+      if (!postcode) postcode = { value: digits, certain: labelled };
+      else uncertain.push({ id: "postcode-many", question: "Notes mention more than one postcode. Use " + digits + " as well?" });
+    }
+    if (postcode && !postcode.certain) {
+      uncertain.push({ id: "postcode-" + postcode.value, kind: "postcode", value: postcode.value, question: "Notes mention " + postcode.value + ". Use that postcode?" });
+      postcode = null;
+    }
+
+    var bill = null;
+    var moneyRe = /\$\s*(\d{1,5}(?:,\d{3})*(?:\.\d{2})?)/g;
+    while ((match = moneyRe.exec(raw))) {
+      var amount = Number(match[1].replace(/,/g, ""));
+      if (!isFinite(amount) || amount <= 0) continue;
+      var windowText = lower.slice(Math.max(0, match.index - 28), Math.min(lower.length, match.index + match[0].length + 28));
+      var period = /quarter/.test(windowText) ? "quarter" : (/year|annual|p\.?a\b/.test(windowText) ? "year" : (/month|\/\s*mo|p\.?m\b/.test(windowText) ? "month" : ""));
+      if (period) {
+        if (!bill) bill = { amount: amount, period: period, certain: true };
+      } else if (!bill) {
+        uncertain.push({ id: "bill-" + amount, kind: "bill", amount: amount, question: "Notes mention a bill of $" + amount + ". Is that per month, per quarter, or per year?" });
+      }
+    }
+
+    var customer = null;
+    if (/\bbusiness\b|\bcommercial\b/.test(lower)) customer = "business";
+    else if (/\bresidential\b|\bhousehold\b|\bhome\b/.test(lower)) customer = "residential";
+
+    var usageLevel = null;
+    if (/\b(low|small)\s+(user|usage|household)\b/.test(lower)) usageLevel = "low";
+    else if (/\b(high|large|big)\s+(user|usage|household)\b/.test(lower)) usageLevel = "high";
+    else if (/\bmedium\s+(user|usage|household)\b/.test(lower)) usageLevel = "medium";
+
+    var tariffId = null;
+    if (/\bdemand\b/.test(lower)) tariffId = "biz-demand";
+    else if (/\btime of use\b|\btou\b/.test(lower)) tariffId = "tou";
+    else if (/\bcontrolled load\b|\bhot water\b/.test(lower)) tariffId = "controlled";
+    else if (/\bsingle rate\b|\bflat rate\b/.test(lower)) tariffId = "single";
+    else if (/\bsolar\b/.test(lower)) tariffId = "solar";
+    if (tariffId && !/\b(on|tariff|meter|plan|has|with)\b/.test(lower)) {
+      var tariffNames = { "biz-demand": "demand", tou: "time of use", controlled: "controlled load", single: "single rate", solar: "solar" };
+      uncertain.push({ id: "tariff-" + tariffId, kind: "tariff", value: tariffId, question: "Notes mention " + (tariffNames[tariffId] || tariffId) + ". Use that tariff?" });
+      tariffId = null;
+    }
+
+    return {
+      tenure: readTenure(raw, today),
+      postcode: postcode,
+      bill: bill,
+      customer: customer,
+      usageLevel: usageLevel,
+      tariffId: tariffId,
+      uncertain: uncertain
+    };
+  }
+
   root.QCCalc = {
     num: num,
     todayISO: todayISO,
@@ -1367,6 +1438,7 @@
     applyParsed: applyParsed,
     parseBill: parseBill,
     extractPdfText: extractPdfText,
-    readTenure: readTenure
+    readTenure: readTenure,
+    readNoteFacts: readNoteFacts
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);
