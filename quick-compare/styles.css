@@ -197,7 +197,8 @@ h1 { margin: 0; font-size: 34px; font-weight: 560; letter-spacing: -0.035em; lin
 }
 
 .card-top h2 { margin: 0; font-size: 18px; letter-spacing: -0.03em; font-weight: 600; }
-.plan-name { margin: 0.15rem 0 0; color: var(--ink-soft); font-size: 0.86rem; }
+.plan-name { margin: 0.15rem 0 0; color: var(--ink); font-size: 0.95rem; font-weight: 600; }
+.rate-link { display: inline-block; margin-top: 0.35rem; color: var(--brass); font-weight: 600; }
 .badges { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .badge {
   font-size: 11px;

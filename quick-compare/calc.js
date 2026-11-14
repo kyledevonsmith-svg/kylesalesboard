@@ -210,6 +210,13 @@
         var unit = field.per === "mj" ? "MJ" : "kWh";
         if (field.kind === "higher") add("Solar export credit", -dollars, Number(qty).toLocaleString("en-AU") + " " + unit + " × " + formatRate(value) + "c");
         else add(field.label, dollars, Number(qty).toLocaleString("en-AU") + " " + unit + " × " + formatRate(value) + field.unit.replace("c", "c"));
+      } else if (field.per === "kw-day") {
+        var kwDay = usage ? usage.demandKw : null;
+        if (kwDay == null) {
+          missing.push("Demand kW");
+          return;
+        }
+        add(field.label, value * kwDay * 365 / 100, Number(kwDay).toLocaleString("en-AU") + " kW × " + formatRate(value) + "c/kW/day × 365");
       } else if (field.per === "kw-month") {
         var kw = usage ? usage.demandKw : null;
         if (kw == null) {

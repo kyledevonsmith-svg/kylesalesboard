@@ -412,7 +412,8 @@
     var still = QCPublic.byId(current.a.planChoiceId);
     if (still && plans.some(function (plan) { return plan.id === still.id; })) return applyPublic(current, still);
     if (!plans.length) return clearPlan(current);
-    return applyPublic(current, plans[0]);
+    var best = choiceForBand(current, "best");
+    return applyPublic(current, best || plans[0]);
   }
 
   function scaleUsage(current, level) {
@@ -1214,6 +1215,8 @@
       card.append(top, grid);
       if (row.bundle && row.bundle.exitNote) card.append(el("p", { class: "note" }, row.bundle.exitNote));
       if (row.bundle && row.bundle.note) card.append(el("p", { class: "note" }, row.bundle.note));
+      var rateLink = (row.bundle && row.bundle.quoteUrl) || row.retailer.quoteUrl;
+      if (rateLink) card.append(el("a", { class: "rate-link", href: rateLink, target: "_blank", rel: "noopener" }, "Rates on the " + row.retailer.name + " website"));
       if (!quiet) list.append(card);
       return card;
     }

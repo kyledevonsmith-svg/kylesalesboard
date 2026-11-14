@@ -16,7 +16,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: node scripts/refresh-public-rates.mjs
       - name: Commit a change when the published prices moved
         run: |
