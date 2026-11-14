@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quick Compare</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="who">
+    <div class="wrap">
+      <h1 id="who-heading">WHO IS THE CUSTOMER CURRENTLY WITH?</h1>
+      <p class="lede" id="disclaimer"></p>
+      <div id="retailer-a-search"></div>
+      <p class="keyhint">Type a name, then use the up and down arrows and Enter. You can also type a retailer that is not listed.</p>
+      <div id="retailer-a-selected" aria-live="polite"></div>
+    </div>
+  </header>
+
+  <div class="workspace wrap">
+    <div class="steps">
+      <section class="panel" id="identify" aria-labelledby="identify-heading">
+        <h2 id="identify-heading">Identify the plan, or enter the rates</h2>
+        <label for="plan-select">Existing plan, if you can identify it</label>
+        <select id="plan-select"></select>
+        <div class="bill-grid" id="bill-drop">
+          <div>
+            <label for="bill-text">Paste a bill or a plan schedule</label>
+            <textarea id="bill-text" rows="4" spellcheck="false" placeholder="Paste bill text. The retailer, postcode and rates are read in this browser. A photo of a bill is not read."></textarea>
+          </div>
+          <div class="bill-actions">
+            <label class="check" for="as-plan-doc"><input id="as-plan-doc" type="checkbox"> This text is current plan documentation, not the bill</label>
+            <button type="button" id="read-bill">Read into current provider</button>
+            <label class="file-label" for="bill-file">Upload a PDF or text file</label>
+            <input id="bill-file" type="file" accept=".pdf,.txt,.csv,text/plain,application/pdf">
+            <p class="file-note">Text and PDF text only. If the read fails, the rate boxes stay available for manual entry.</p>
+          </div>
+        </div>
+        <p id="bill-status" class="status" aria-live="polite"></p>
+        <button type="button" class="text-button" id="new-customer">New customer</button>
+      </section>
+
+      <section class="panel" id="account" aria-labelledby="account-heading">
+        <h2 id="account-heading">State, premises and tariff</h2>
+        <div id="context-mount"></div>
+        <p id="context-hint" class="hint"></p>
+        <p id="context-message" class="status" aria-live="polite"></p>
+      </section>
+
+      <section class="panel" id="current-rates" aria-labelledby="rates-heading">
+        <h2 id="rates-heading">Usage and current rates</h2>
+        <p class="hint">Leave a usage box blank and a labelled assumption is used. The annual figure still includes supply and the other parts of this tariff. It is never the usage rate alone.</p>
+        <div id="usage-mount" class="field-grid"></div>
+        <h3>Retailer A rates</h3>
+        <div id="rate-mount" class="field-grid"></div>
+        <p id="reload-a-row"></p>
+      </section>
+
+      <section class="panel" id="alternative" aria-labelledby="alt-heading">
+        <h2 id="alt-heading">Alternative retailer</h2>
+        <div id="retailer-b-search"></div>
+        <div id="retailer-b-selected"></div>
+        <div id="b-rate-mount" class="field-grid"></div>
+        <p id="reload-b-row"></p>
+        <button type="button" id="rank-button">COMPARE AGAINST OTHER RETAILERS</button>
+        <div id="extra-tools"></div>
+      </section>
+    </div>
+
+    <div class="result" id="result">
+      <div id="comparison-mount"></div>
+      <div id="savings-mount"></div>
+    </div>
+  </div>
+
+  <div id="savings-bar" hidden></div>
+  <div id="dialog-root"></div>
+  <script src="data.js"></script>
+  <script src="calc.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
