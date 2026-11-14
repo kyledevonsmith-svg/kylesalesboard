@@ -1063,6 +1063,20 @@
     return null;
   }
 
+  // Orange name = ours. Green name and a green View button = selling today.
+  // Both lists stay empty until Bill Cutters names them. Do not guess from a public page.
+  var OURS = [];
+  var SELLING = [];
+
+  function tableMark(id) {
+    var ours = OURS.indexOf(id) !== -1;
+    var sell = SELLING.indexOf(id) !== -1;
+    if (ours && sell) return "both";
+    if (sell) return "sell";
+    if (ours) return "ours";
+    return "";
+  }
+
   function searchRetailers(query) {
     var q = String(query || "").trim().toLowerCase();
     var list = RETAILERS.slice();
@@ -1103,6 +1117,9 @@
     defaultUsage: defaultUsage,
     comparatorFor: comparatorFor,
     searchRetailers: searchRetailers,
+    OURS: OURS,
+    SELLING: SELLING,
+    tableMark: tableMark,
     FIT_SCALE: FIT_SCALE
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

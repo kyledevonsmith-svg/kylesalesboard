@@ -1130,6 +1130,209 @@
     return chunks.filter(Boolean).join("\n");
   }
 
+  function latestJuly(today) {
+    var year = today.getFullYear();
+    var july = new Date(year, 6, 1);
+    if (today < july) july = new Date(year - 1, 6, 1);
+    return july;
+  }
+
+  function monthsBetween(start, today) {
+    var months = (today.getFullYear() - start.getFullYear()) * 12 + (today.getMonth() - start.getMonth());
+    return months + (today.getDate() - start.getDate()) / 31;
+  }
+
+  function bandForTenure(months) {
+    if (months <= 6) return "best";
+    if (months >= 12) return "standing";
+    return "market";
+  }
+
+  function tenureSummary(months, band, phrase, julyText, standingJuly) {
+    var rounded = Math.round(months * 10) / 10;
+    var how;
+    if (rounded < 0.8) how = "less than a month";
+    else if (rounded >= 18 && Math.abs(rounded / 12 - Math.round(rounded / 12)) < 0.15) how = "about " + Math.round(rounded / 12) + " years";
+    else how = "about " + (Math.abs(rounded - Math.round(rounded)) < 0.05 ? String(Math.round(rounded)) : rounded.toFixed(1)) + " months";
+    var line = "Matched \"" + phrase + "\" — " + how + ". ";
+    if (band === "best") line += "Within 6 months of changing, so this is the retailer’s best plan.";
+    else if (band === "standing") line += "A year or longer, so this is the standing offer, equal to the reference price.";
+    else line += "Past 6 months and still inside the 12-month residential plan.";
+    if (standingJuly) line += " Residential rates are reviewed each 1 July. This uses the current reference price.";
+    else if (julyText) line += " Rates are reviewed on 1 July and may have changed on " + julyText + ".";
+    return line;
+  }
+
+  function readTenure(text, today) {
+    today = today ? new Date(today.getTime()) : new Date();
+    today.setHours(12, 0, 0, 0);
+    var raw = String(text || "");
+    if (!raw.trim()) return null;
+    var found = [];
+    var used = [];
+
+    function free(start, end) {
+      return !used.some(function (span) { return start < span.end && end > span.start; });
+    }
+    function hold(start, end) {
+      used.push({ start: start, end: end });
+    }
+    function add(months, phrase, kind, index) {
+      if (months == null || !isFinite(months) || months < 0 || months > 240) return;
+      found.push({ months: months, phrase: String(phrase).trim(), kind: kind, index: index });
+    }
+    function fromStart(start, phrase, kind, index) {
+      if (!start || start > today) return;
+      add(monthsBetween(start, today), phrase, kind, index);
+    }
+
+    var numWord = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, eighteen: 18 };
+    function numberOf(token) {
+      var key = String(token || "").toLowerCase();
+      if (numWord[key] != null) return numWord[key];
+      var n = Number(key);
+      return isFinite(n) ? n : null;
+    }
+    var monthIndex = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    function monthOf(name) {
+      return monthIndex[String(name || "").slice(0, 3).toLowerCase()];
+    }
+    var NUM = "(?:\\d+(?:\\.\\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|eighteen)";
+    var MON = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+
+    function mentionsReview(match) {
+      var before = raw.slice(Math.max(0, match.index - 48), match.index).toLowerCase();
+      if (/\b(since|joined|switched|moved|started|from|been|signed)\b/.test(before)) return false;
+      return /\b(rates?|reviews?|reviewed|pricing|prices?)\b/.test(before);
+    }
+
+    function scan(re, kind, onMatch) {
+      re.lastIndex = 0;
+      var match;
+      while ((match = re.exec(raw))) {
+        if (!free(match.index, match.index + match[0].length)) continue;
+        if (onMatch(match) !== false) hold(match.index, match.index + match[0].length);
+      }
+    }
+
+    scan(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g, "date", function (match) {
+      if (mentionsReview(match)) return false;
+      fromStart(new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])), match[0], "date", match.index);
+    });
+    scan(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2})\b/g, "date", function (match) {
+      if (mentionsReview(match)) return false;
+      var day = Number(match[1]);
+      var month = Number(match[2]);
+      if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+      fromStart(new Date(Number(match[3]), month - 1, day), match[0], "date", match.index);
+    });
+    scan(new RegExp("\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(" + MON + ")(?:\\s+(20\\d{2}))?\\b", "gi"), "date", function (match) {
+      if (mentionsReview(match)) return false;
+      var month = monthOf(match[2]);
+      var day = Number(match[1]);
+      if (month == null || day < 1 || day > 31) return false;
+      var start = match[3] ? new Date(Number(match[3]), month, day) : mostRecentDay(month, day, today);
+      fromStart(start, match[0], match[3] ? "date" : "month", match.index);
+    });
+    scan(new RegExp("\\b(" + MON + ")\\s+(20\\d{2})\\b", "gi"), "date", function (match) {
+      if (mentionsReview(match)) return false;
+      var month = monthOf(match[1]);
+      if (month == null) return false;
+      fromStart(new Date(Number(match[2]), month, 1), match[0], "date", match.index);
+    });
+    scan(new RegExp("\\b(" + MON + ")\\s+last\\s+year\\b", "gi"), "month", function (match) {
+      if (mentionsReview(match)) return false;
+      var month = monthOf(match[1]);
+      if (month == null) return false;
+      fromStart(new Date(today.getFullYear() - 1, month, 1), match[0], "month", match.index);
+    });
+    scan(new RegExp("\\b(?:since|from|joined|switched|moved|changed|started|in)\\s+(" + MON + ")\\b", "gi"), "month", function (match) {
+      if (mentionsReview(match)) return false;
+      var month = monthOf(match[1]);
+      if (month == null) return false;
+      fromStart(mostRecentDay(month, 1, today), match[0], "month", match.index);
+    });
+    scan(new RegExp("\\b(?:over|more than|longer than|just over|after)\\s+(" + NUM + ")\\s+years?\\b", "gi"), "number", function (match) {
+      var n = numberOf(match[1]);
+      if (n == null) return false;
+      add(n * 12 + 0.2, match[0], "number", match.index);
+    });
+    scan(new RegExp("\\b(?:over|more than|longer than|just over|after)\\s+(" + NUM + ")\\s+months?\\b", "gi"), "number", function (match) {
+      var n = numberOf(match[1]);
+      if (n == null) return false;
+      add(n + 0.2, match[0], "number", match.index);
+    });
+    scan(new RegExp("\\b(?:under|within|less than|inside)\\s+(" + NUM + ")\\s+months?\\b", "gi"), "number", function (match) {
+      var n = numberOf(match[1]);
+      if (n == null) return false;
+      add(n, match[0], "number", match.index);
+    });
+    scan(new RegExp("\\b(?:under|within|less than|inside)\\s+(?:a|one|1)\\s+years?\\b", "gi"), "number", function (match) {
+      add(11, match[0], "number", match.index);
+    });
+    scan(/\b(?:a\s+)?year\s+and\s+a\s+half\b/gi, "number", function (match) {
+      add(18, match[0], "number", match.index);
+    });
+    scan(/\bhalf\s+a\s+year\b/gi, "number", function (match) {
+      add(6, match[0], "number", match.index);
+    });
+    scan(new RegExp("\\b(" + NUM + ")\\s*(?:years?|yrs?)\\b", "gi"), "number", function (match) {
+      var n = numberOf(match[1]);
+      if (n == null) return false;
+      add(n * 12, match[0], "number", match.index);
+    });
+    scan(new RegExp("\\b(" + NUM + ")\\s*(?:months?|mths?|mnths?|mons?)\\b", "gi"), "number", function (match) {
+      var n = numberOf(match[1]);
+      if (n == null) return false;
+      add(n, match[0], "number", match.index);
+    });
+    scan(/\b(\d+)\s+weeks?\b/gi, "number", function (match) {
+      add(Number(match[1]) / 4.345, match[0], "number", match.index);
+    });
+    scan(/\b(?:a\s+)?couple\s+(?:of\s+)?months?\b/gi, "vague", function (match) {
+      add(2, match[0], "vague", match.index);
+    });
+    scan(/\b(?:a\s+)?few\s+months?\b/gi, "vague", function (match) {
+      add(3, match[0], "vague", match.index);
+    });
+    scan(/\bseveral\s+months?\b/gi, "vague", function (match) {
+      add(8, match[0], "vague", match.index);
+    });
+    scan(/\b(?:for\s+years|years\s+ago|long[\s-]*term|a\s+long\s+time)\b/gi, "vague", function (match) {
+      add(24, match[0], "vague", match.index);
+    });
+    scan(/\b(?:just\s+(?:switched|joined|moved|changed|signed)|new\s+customer|recently\s+(?:switched|joined|moved)|last\s+week|this\s+week|brand\s+new)\b/gi, "vague", function (match) {
+      add(0.25, match[0], "vague", match.index);
+    });
+
+    if (!found.length) return null;
+    var rank = { date: 5, month: 4, number: 3, vague: 1 };
+    found.sort(function (a, b) {
+      if (rank[a.kind] !== rank[b.kind]) return rank[b.kind] - rank[a.kind];
+      return b.index - a.index;
+    });
+    var picked = found[0];
+    var band = bandForTenure(picked.months);
+    var start = new Date(today.getTime());
+    start.setMonth(start.getMonth() - Math.floor(picked.months));
+    var july = latestJuly(today);
+    var julyText = "1 July " + july.getFullYear();
+    var crossedJuly = start < july;
+    return {
+      months: Math.round(picked.months * 10) / 10,
+      band: band,
+      phrase: picked.phrase,
+      julyReview: crossedJuly && band !== "standing",
+      summary: tenureSummary(picked.months, band, picked.phrase, crossedJuly && band !== "standing" ? julyText : "", band === "standing")
+    };
+  }
+
+  function mostRecentDay(month, day, today) {
+    var date = new Date(today.getFullYear(), month, day);
+    if (date > today) date = new Date(today.getFullYear() - 1, month, day);
+    return date;
+  }
+
   root.QCCalc = {
     num: num,
     todayISO: todayISO,
@@ -1163,6 +1366,7 @@
     lastVerified: lastVerified,
     applyParsed: applyParsed,
     parseBill: parseBill,
-    extractPdfText: extractPdfText
+    extractPdfText: extractPdfText,
+    readTenure: readTenure
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);
