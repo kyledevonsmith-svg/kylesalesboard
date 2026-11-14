@@ -1,6 +1,7 @@
 "use strict";
 /* Quick Compare reference data.
-   Sample rates for a sales-floor tool. Not live offers.
+   The home rank does not show these sample factors as a retailer price.
+   Published plans live in public-plans.js, refreshed from retailer websites.
    Electricity caps for NSW, south-east Queensland and South Australia follow the
    AER Default Market Offer 2026–27 (1 July 2026 to 30 June 2027).
    Victorian figures follow the published Victorian Default Offer shape for 2026–27.
@@ -9,7 +10,7 @@
 (function (root) {
   var VERIFIED_ISO = "2026-11-14";
   var VERIFIED_LABEL = "14 November 2026";
-  var DISCLAIMER = "Sample reference rates, last verified 14 November 2026. Not live offers. Do not read these cents to a customer as today's price.";
+  var DISCLAIMER = "Only rates published on a retailer's own website are shown. Where a retailer has not published a price for this tariff, the card says so. A market offer that appears only after an address quote is not invented.";
 
   var NEM = ["NSW", "VIC", "QLD", "SA"];
   var NEM_ACT = ["NSW", "VIC", "QLD", "SA", "ACT"];
@@ -428,7 +429,7 @@
     R({ id: "kogan", name: "Kogan Energy", aliases: ["Kogan"], electricity: NEM_ACT.slice(), gas: NEM.slice(), businessElectricity: [], businessGas: [], quoteUrl: "https://www.koganenergy.com.au/", factor: [0.89, 0.97, 4.2] }),
     R({ id: "nectr", name: "nectr", aliases: ["Nectr"], electricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://www.nectr.com.au/", factor: [0.87, 0.94, 3.6] }),
     R({ id: "covau", name: "CovaU", aliases: ["Covau"], electricity: NEM_ACT.concat(["TAS"]), gas: NEM_ACT.slice(), quoteUrl: "https://www.covau.com.au/", factor: [0.91, 0.97, 4.6] }),
-    R({ id: "bluenrg", name: "Blue NRG", aliases: ["BlueNRG"], electricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://www.bluenrg.com.au/", factor: [0.86, 0.94, 0], note: "Stronger in business electricity than in household plans." }),
+    R({ id: "bluenrg", name: "Blue NRG", aliases: ["BlueNRG"], electricity: [], businessElectricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://www.bluenrg.com.au/", factor: [0.86, 0.94, 0], note: "Business electricity. Not listed for residential." }),
     R({ id: "flow", name: "Flow Power", aliases: ["Flow"], electricity: NEM_ACT.slice(), gas: [], quoteUrl: "https://flowpower.com.au/", factor: [0.88, 0.96, 5] }),
     R({ id: "reamped", name: "ReAmped Energy", aliases: ["ReAmped", "Reamped"], electricity: NEM.slice(), gas: [], quoteUrl: "https://www.reampedenergy.com.au/", factor: [0.91, 0.97, 4.8] }),
     R({ id: "discover", name: "Discover Energy", aliases: ["Discover"], electricity: NEM.slice(), gas: [], quoteUrl: "https://www.discoverenergy.com.au/", factor: [0.92, 0.98, 5] }),
@@ -581,6 +582,7 @@
 
   var TARIFFS = [
     { id: "single", label: "Single rate", group: "Residential electricity", fuel: "electricity", customer: "residential", fields: [supplyField(), kwh("usage", "General usage", "generalKwh")], usage: [usageField("generalKwh", "General usage", "kWh/year")] },
+    { id: "demand-single", label: "Demand — single rate", group: "Residential electricity", fuel: "electricity", customer: "residential", fields: [supplyField(), kwh("usage", "General usage", "generalKwh"), { key: "demand", label: "Demand", unit: "c/kW/day", per: "kw-day", kind: "lower", usageKey: "demandKw" }], usage: [usageField("generalKwh", "General usage", "kWh/year"), usageField("demandKw", "Demand", "kW")] },
     { id: "tou", label: "Time of use — peak, shoulder, off-peak", group: "Residential electricity", fuel: "electricity", customer: "residential", fields: touFields(false), usage: touUsage(false) },
     { id: "tou-two", label: "Time of use — peak and off-peak", group: "Residential electricity", fuel: "electricity", customer: "residential", fields: twoFields(false), usage: twoUsage(false) },
     { id: "tou-soak", label: "Time of use — peak, solar soak, off-peak", group: "Residential electricity", fuel: "electricity", customer: "residential", fields: soakFields(false), usage: soakUsage(false) },
@@ -593,6 +595,7 @@
     { id: "gas-single", label: "Single rate", group: "Residential gas", fuel: "gas", customer: "residential", fields: [supplyField(), { key: "gasUsage", label: "Gas usage", unit: "c/MJ", per: "mj", kind: "lower", usageKey: "gasMj" }], usage: [usageField("gasMj", "Gas usage", "MJ/year")] },
     { id: "gas-block", label: "Block rate", group: "Residential gas", fuel: "gas", customer: "residential", calc: "gas-block", fields: [supplyField(), { key: "block1", label: "Block 1 usage", unit: "c/MJ", per: "mj", kind: "lower" }, { key: "block1Limit", label: "Block 1 limit", unit: "MJ/day", kind: "limit" }, { key: "block2", label: "Block 2 usage", unit: "c/MJ", per: "mj", kind: "lower" }], usage: [usageField("gasMj", "Gas usage", "MJ/year")] },
     { id: "biz-single", label: "Single rate", group: "Business electricity", fuel: "electricity", customer: "business", fields: [supplyField(), kwh("usage", "General usage", "generalKwh")].concat(businessExtras), usage: [usageField("generalKwh", "General usage", "kWh/year")] },
+    { id: "biz-demand-single", label: "Demand — single rate", group: "Business electricity", fuel: "electricity", customer: "business", fields: [supplyField(), kwh("usage", "General usage", "generalKwh"), { key: "demand", label: "Demand", unit: "c/kW/day", per: "kw-day", kind: "lower", usageKey: "demandKw" }].concat(businessExtras), usage: [usageField("generalKwh", "General usage", "kWh/year"), usageField("demandKw", "Demand", "kW")] },
     { id: "biz-tou", label: "Time of use — peak, shoulder, off-peak", group: "Business electricity", fuel: "electricity", customer: "business", fields: touFields(false).concat(businessExtras), usage: touUsage(false) },
     { id: "biz-two", label: "Time of use — peak and off-peak", group: "Business electricity", fuel: "electricity", customer: "business", fields: twoFields(false).concat(businessExtras), usage: twoUsage(false) },
     { id: "biz-demand", label: "Demand — peak, shoulder, off-peak", group: "Business electricity", fuel: "electricity", customer: "business", fields: touFields(false).concat([{ key: "demand", label: "Demand", unit: "$/kW/month", per: "kw-month", kind: "lower", usageKey: "demandKw" }]).concat(businessExtras), usage: touUsage(false).concat([usageField("demandKw", "Demand", "kW")]) },
@@ -1063,6 +1066,61 @@
     return null;
   }
 
+  // Orange name = ours. Green name and a green View button = selling today.
+  var OURS = ["dodo", "bluenrg", "first", "nextbusiness", "momentum", "alinta", "engie", "agl"];
+  var SELLING = [];
+
+  function tableMark(id) {
+    var ours = OURS.indexOf(id) !== -1;
+    var sell = SELLING.indexOf(id) !== -1;
+    if (ours && sell) return "both";
+    if (sell) return "sell";
+    if (ours) return "ours";
+    return "";
+  }
+
+  function networkOffer(network, tariffId, customer) {
+    var family = familyFor(tariffId, customer);
+    if (!family || !network) return false;
+    if (family === "flat") return !!network.flat;
+    if (family === "businessFlat") return !!network.businessFlat;
+    if (family === "controlled") return !!(network.structures && network.structures.controlled) || !!(network.cl && network.cl.cl1 != null);
+    if (tariffId === "biz-demand") return !!(network.structures && (network.structures.demand || network.structures.businessDemand));
+    return !!(network.structures && network.structures[family]);
+  }
+
+  function tariffsAvailable(ctx) {
+    if (!ctx) return [];
+    return tariffsFor(ctx.customer, ctx.fuel).filter(function (tariff) {
+      if (ctx.fuel === "gas") return !!(REGIONS[ctx.region] && REGIONS[ctx.region].gas);
+      return !!networkById(ctx.network);
+    });
+  }
+
+  function demandRate(retailer, ctx) {
+    var network = networkById(ctx && ctx.network);
+    if (!network || network.demand == null) return null;
+    var usageFactor = retailer && retailer.factor && retailer.factor.usage ? retailer.factor.usage : 1;
+    return r3(network.demand * usageFactor);
+  }
+
+  function offerExists(retailer, ctx) {
+    if (!retailer || !ctx || !serves(retailer, ctx)) return false;
+    if (ctx.fuel === "gas") return !!(REGIONS[ctx.region] && REGIONS[ctx.region].gas);
+    if (!networkById(ctx.network)) return false;
+    if (retailer.publishedDirect) {
+      var named = PLAN_PATTERNS.some(function (pattern) {
+        return pattern.retailerId === retailer.id && pattern.tariffs && pattern.tariffs.indexOf(ctx.tariff) !== -1;
+      });
+      if (named) return true;
+      var family = familyFor(ctx.tariff, ctx.customer);
+      if (family === "flat" || family === "businessFlat") return networkOffer(networkById(ctx.network), ctx.tariff, ctx.customer);
+      var structure = networkById(ctx.network).structures && networkById(ctx.network).structures[family];
+      return !!(structure && structure.quality === "published-tariff");
+    }
+    return true;
+  }
+
   function searchRetailers(query) {
     var q = String(query || "").trim().toLowerCase();
     var list = RETAILERS.slice();
@@ -1103,6 +1161,13 @@
     defaultUsage: defaultUsage,
     comparatorFor: comparatorFor,
     searchRetailers: searchRetailers,
+    OURS: OURS,
+    SELLING: SELLING,
+    tableMark: tableMark,
+    networkOffer: networkOffer,
+    tariffsAvailable: tariffsAvailable,
+    offerExists: offerExists,
+    demandRate: demandRate,
     FIT_SCALE: FIT_SCALE
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);
