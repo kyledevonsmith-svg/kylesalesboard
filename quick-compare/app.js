@@ -1358,6 +1358,39 @@
     if (compareWith) closeCompare();
   });
 
+  function startFresh() {
+    try { sessionStorage.removeItem("qc-home-v1"); } catch (err) { /* private mode */ }
+    var fresh = loadPack();
+    state = fresh.state;
+    usageTouched = false;
+    openId = "";
+    sortAsc = true;
+    notes = "";
+    planPinned = false;
+    appliedBand = "";
+    appliedRetailer = "";
+    usageLevel = "medium";
+    dismissed = {};
+    noteBill = null;
+    noteHint = "";
+    compareWith = "";
+    compareExtra = "";
+    comparePlanId = "";
+    showDemand = false;
+    stateLocked = false;
+    if (window.QCCompare) window.QCCompare.reset();
+    var panel = document.getElementById("settings-panel");
+    var settings = document.getElementById("settings-button");
+    if (panel) panel.setAttribute("hidden", "");
+    if (settings) settings.setAttribute("aria-expanded", "false");
+    if (!state.usage[usageKey()] && !usageTouched) state = fillUsage(state);
+    save();
+    paint();
+  }
+
+  var refreshButton = document.getElementById("refresh-button");
+  if (refreshButton) refreshButton.addEventListener("click", startFresh);
+
   paintSettings();
 
   if (!state.usage[usageKey()] && !usageTouched) {
